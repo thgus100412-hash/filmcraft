@@ -183,3 +183,5 @@ Ranked; detail and "done when" in [docs/roadmap.md](docs/roadmap.md) and [docs/g
 ### Local browser studio — 2026-10-21
 
 FilmCraft Shorts now includes a Rust HTTP service and responsive Korean browser workflow for uploads, shooting groups, editorial briefs, actual worker stages/cancellation, job history, preview and downloads. Browser readiness checks expose missing local-model prerequisites; the UI does not claim real ASR or editorial validation. HTTP tests use a mock worker for orchestration and existing engine tests cover actual media output. See the application README for launch commands and limits.
+
+The Shorts browser also offers a three-role Sotam caption preset derived from inspected user PSD text/style metadata (no PSD or fonts redistributed), explicit microphone caption roles, installed-font warnings and a native CPU-oriented Mac AI setup helper. Preset assembly/rendering is covered by synthetic tests; Monterey AI runtime builds and real interview quality still require native validation.

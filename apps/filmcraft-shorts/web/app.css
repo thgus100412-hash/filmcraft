@@ -1222,3 +1222,43 @@ textarea::placeholder {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
 }
+
+.caption-controls {
+  margin: 24px 0;
+}
+.caption-controls > label {
+  display: grid;
+  gap: 8px;
+}
+.caption-controls input,
+.caption-controls select {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border, #ddd);
+  border-radius: 8px;
+}
+.caption-sample {
+  display: grid;
+  gap: 18px;
+  padding: 24px 12px;
+  background: #25272c;
+  border-radius: 12px;
+  text-align: center;
+}
+.caption-sample strong {
+  color: #3ef9ff;
+  font-size: 22px;
+}
+.caption-sample span {
+  font-size: 16px;
+}
+.crew-caption {
+  color: #3ef9ff;
+}
+.guest-caption {
+  color: #fffc00;
+}
+.file-options > select:last-child {
+  grid-column: 1 / -1;
+  width: 100%;
+}

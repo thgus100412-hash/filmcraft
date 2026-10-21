@@ -14,6 +14,12 @@ const LIMIT: usize = 16 * 1024 * 1024;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Job {
+    #[serde(default)]
+    pub caption_design: CaptionDesign,
+    #[serde(default = "title_font")]
+    pub title_font: String,
+    #[serde(default = "dialogue_font")]
+    pub dialogue_font: String,
     pub brief: String,
     pub groups: Vec<Group>,
     pub planner: Planner,
@@ -21,6 +27,26 @@ pub struct Job {
     pub max_seconds: u32,
     #[serde(default = "default_model")]
     pub speech_model: String,
+}
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionDesign {
+    #[default]
+    Standard,
+    Sotam,
+}
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionRole {
+    #[default]
+    Guest,
+    Crew,
+}
+fn title_font() -> String {
+    "SDCheongRyu".into()
+}
+fn dialogue_font() -> String {
+    "GangwonEduAll-OTFBold".into()
 }
 fn default_duration() -> u32 {
     60
@@ -46,6 +72,9 @@ fn audio_sync() -> String {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Source {
+    /// Explicit owner of this microphone; never inferred from face or speaker numbers.
+    #[serde(default)]
+    pub caption_role: CaptionRole,
     pub path: PathBuf,
     /// Optional known microphone owner / camera framing, never inferred as verified identity.
     #[serde(default)]
@@ -112,6 +141,9 @@ pub fn execute(s: &mut Session, command: &str, params: Value) -> Result<Value> {
 
 pub fn validate_job(job: &Job) -> Result<()> {
     validate_planner(&job.planner)?;
+    if [&job.title_font, &job.dialogue_font].iter().any(|f| f.trim().is_empty() || f.len() > 256) {
+        return Err("font names must contain 1–256 bytes".into());
+    }
     if job.brief.trim().is_empty() || job.brief.len() > 16_000 {
         return Err("brief must contain 1–16000 bytes".into());
     }
@@ -197,7 +229,7 @@ pub fn prepare(job: &Job, base: &Path) -> Result<Prepared> {
                 .enumerate()
                 .map(|(i, w)| json!({"id":i,"text":w.text,"start":w.start.0,"end":w.end.0,"speaker":transcript.speaker_name(w),"confidence":w.confidence}))
                 .collect();
-            source_analysis.push(json!({"id":si,"label":source.label,"video":video,"audio":audio,"start":start,"duration":duration,"words":words}));
+            source_analysis.push(json!({"id":si,"label":source.label,"caption_role":source.caption_role,"video":video,"audio":audio,"start":start,"duration":duration,"words":words}));
             media.push(Media { item: id, start, duration, video, audio, transcript });
         }
         analysis.push(json!({"id":gi,"name":g.name,"sources":source_analysis,"sync":sync}));
@@ -321,10 +353,55 @@ pub fn validate_plan(job: &Job, groups: &[Vec<Media>], plan: &Plan) -> Result<Ve
 /// One selected microphone at a time; camera scratch tracks and other mics are absent.
 pub fn assemble(prepared: &mut Prepared, job: &Job, plan: &Plan) -> Result<()> {
     let cuts = validate_plan(job, &prepared.groups, plan)?;
+    let (title_face, dialogue_face) = if job.caption_design == CaptionDesign::Sotam {
+        let dialogue = plan
+            .segments
+            .iter()
+            .filter_map(|seg| {
+                prepared.groups.get(seg.group).and_then(|g| g.get(seg.audio)).and_then(|m| m.transcript.words.get(seg.first_word..=seg.last_word))
+            })
+            .flatten()
+            .try_fold(String::new(), |mut text, word| -> Result<String> {
+                if text.len().saturating_add(word.text.len()).saturating_add(1) > LIMIT {
+                    return Err("caption text exceeds 16 MiB".into());
+                }
+                text.push_str(&word.text);
+                text.push(' ');
+                Ok(text)
+            })?;
+        (caption_font(&job.title_font, &plan.title)?, caption_font(&job.dialogue_font, &dialogue)?)
+    } else {
+        (job.title_font.clone(), job.dialogue_font.clone())
+    };
     let s = &mut prepared.session;
     execute(s, "file.newSequence", json!({"name":plan.title,"width":1080,"height":1920,"fps":30,"video":2,"audio":1}))?;
     let mut at = 0i64;
-    for cut in cuts {
+    let mut dialogue = Vec::new();
+    for (cut, segment) in cuts.into_iter().zip(&plan.segments) {
+        let group = job.groups.get(segment.group).ok_or("unknown caption group")?;
+        let role = group.cameras.iter().chain(&group.recordings).nth(segment.audio).ok_or("unknown caption source")?.caption_role;
+        let words = &prepared.groups.get(segment.group).and_then(|g| g.get(segment.audio)).ok_or("missing caption transcript")?.transcript.words;
+        let selected = words.get(segment.first_word..=segment.last_word).ok_or("missing caption words")?;
+        let mut text = String::new();
+        let mut begin = 0;
+        let mut end = 0;
+        for word in selected {
+            let start = at.checked_add(word.start.0 - cut.audio_in).ok_or("caption time overflow")?;
+            let stop = at.checked_add(word.end.0 - cut.audio_in).ok_or("caption time overflow")?;
+            if !text.is_empty() && (text.chars().count() + word.text.chars().count() > 20 || stop - begin > 3 * TICKS_PER_SECOND) {
+                dialogue.push((role, begin, end, std::mem::take(&mut text)));
+            }
+            if text.is_empty() {
+                begin = start;
+            } else {
+                text.push(' ');
+            }
+            text.push_str(word.text.trim());
+            end = stop;
+        }
+        if !text.is_empty() {
+            dialogue.push((role, begin, end, text));
+        }
         let placed = execute(
             s,
             "timeline.place",
@@ -339,13 +416,89 @@ pub fn assemble(prepared: &mut Prepared, job: &Job, plan: &Plan) -> Result<()> {
         at = at.checked_add(cut.duration).ok_or("timeline overflow")?;
     }
     let title = execute(s, "captions.newTrack", json!({"name":"Title","language":"ko"}))?["track"].clone();
-    execute(s, "captions.add", json!({"track":title,"text":plan.title,"time":0,"durationSeconds":(at as f64 / TICKS_PER_SECOND as f64).min(3.0)}))?;
-    execute(s, "captions.setStyle", json!({"track":title,"font":"Noto Sans CJK KR","size":72,"outline":3,"anchor":"top","margin":0.10}))?;
+    let sotam = job.caption_design == CaptionDesign::Sotam;
+    let title_text = if sotam { two_line_title(&plan.title) } else { plan.title.clone() };
+    let title_style = filmcraft_text::TextStyle { family: title_face.clone(), style: "SemiBold".into(), size: 120.0, ..Default::default() };
+    let title_width = title_text.lines().map(|line| filmcraft_text::measure(line, &title_style)).fold(1.0f32, f32::max);
+    let title_size = 67.5 * (970.0 / title_width).min(1.0);
+    execute(
+        s,
+        "captions.add",
+        json!({"track":title,"text":title_text,"time":0,"durationSeconds":if sotam { at as f64 / TICKS_PER_SECOND as f64 } else { (at as f64 / TICKS_PER_SECOND as f64).min(3.0) }}),
+    )?;
+    let mut style = json!({"track":title,"font":"Noto Sans CJK KR","size":72,"outline":3,"anchor":"top","margin":0.10});
+    if sotam {
+        style = json!({"track":title,"font":title_face,"size":title_size,"outline":2.8125,"outlineColor":"#22232b","color":"#3ef9ff","background":false,"anchor":"top","margin":0.060,"lineSpacing":1.175});
+    }
+    execute(s, "captions.setStyle", style)?;
+    // Keep an unstyled, disabled combined track for an SRT containing every speaker.
+    // The three visible tracks are title, guest, crew. SRT itself cannot carry fonts/colors.
+    let role_tracks = if sotam {
+        let mut tracks = Vec::new();
+        for (name, role, color) in [("말자막 게스트", CaptionRole::Guest, "#fffc00"), ("말자막 제작진", CaptionRole::Crew, "#3ef9ff")] {
+            let track = execute(s, "captions.newTrack", json!({"name":name,"language":"ko"}))?["track"].clone();
+            execute(
+                s,
+                "captions.setStyle",
+                json!({"track":track,"font":dialogue_face,"size":51.75,"outline":1.6875,"outlineColor":"#000000","color":color,"background":false,"anchor":"bottom","margin":0.30,"lineSpacing":1.2}),
+            )?;
+            tracks.push((role, track));
+        }
+        tracks
+    } else {
+        Vec::new()
+    };
     let captions =
         execute(s, "transcript.createCaptions", json!({"name":"Interview","maxChars":20,"lines":2,"minSeconds":0.4,"maxSeconds":3}))?["track"].clone();
-    execute(s, "captions.setTrack", json!({"track":captions,"language":"ko"}))?;
-    execute(s, "captions.setStyle", json!({"track":captions,"font":"Noto Sans CJK KR","size":64,"outline":3,"anchor":"bottom","margin":0.13}))?;
+    execute(s, "captions.setTrack", json!({"track":captions,"language":"ko","enabled":!sotam}))?;
+    if sotam {
+        for (role, begin, end, text) in dialogue {
+            let track = &role_tracks.iter().find(|(r, _)| *r == role).ok_or("missing speaker track")?.1;
+            let added =
+                execute(s, "captions.add", json!({"track":track,"text":text,"time":begin,"durationSeconds":(end - begin) as f64 / TICKS_PER_SECOND as f64}))?;
+            execute(s, "captions.setTimes", json!({"caption":added["caption"],"startTime":begin,"endTime":end}))?;
+        }
+    } else {
+        execute(s, "captions.setStyle", json!({"track":captions,"font":"Noto Sans CJK KR","size":64,"outline":3,"anchor":"bottom","margin":0.13}))?;
+    }
     Ok(())
+}
+
+/// Never export missing-glyph boxes when a PSD font is unavailable on the machine.
+fn caption_font(requested: &str, text: &str) -> Result<String> {
+    filmcraft_text::fonts::scan_system();
+    for name in [requested, "Apple SD Gothic Neo", "AppleGothic", "Noto Sans CJK KR", "Noto Sans KR", "Malgun Gothic"] {
+        let resolved = filmcraft_text::resolve(name, "SemiBold");
+        if !resolved.missing && filmcraft_text::fonts::face(resolved.face).covers_text(text) {
+            if name != requested {
+                use std::io::Write;
+                let _ = writeln!(std::io::stderr(), "자막 글꼴 대체: {requested} → {name}. PSD와 글씨 모양이 달라집니다.");
+            }
+            return Ok(name.into());
+        }
+    }
+    Err(format!(
+        "자막 글꼴 `{requested}`을 찾을 수 없거나 대사의 글자를 표시하지 못합니다. 한국어 지원 글꼴을 설치하고 웹 서버를 다시 실행한 뒤 실제 글꼴 이름을 선택하세요."
+    ))
+}
+
+/// Preserve all title text while suggesting a balanced two-line layout.
+fn two_line_title(title: &str) -> String {
+    let chars: Vec<_> = title.chars().collect();
+    if chars.len() < 12 || title.contains('\n') {
+        return title.into();
+    }
+    let middle = chars.len() / 2;
+    let at = chars
+        .iter()
+        .enumerate()
+        .filter(|(i, c)| **c == ' ' && *i > 0 && *i + 1 < chars.len())
+        .min_by_key(|(i, _)| i.abs_diff(middle))
+        .map(|(i, _)| i)
+        .unwrap_or(middle);
+    let left: String = chars.iter().take(at).collect();
+    let right: String = chars.iter().skip(at).collect();
+    format!("{}\n{}", left.trim_end(), right.trim_start())
 }
 
 #[cfg(test)]
@@ -380,6 +533,19 @@ mod tests {
         }
     }
     #[test]
+    fn unsupported_caption_glyphs_fail_instead_of_exporting_boxes() {
+        assert!(caption_font("Missing-PSD-Font", "\u{10ffff}").is_err());
+        assert_eq!(caption_font("Inter", "Starting again").unwrap(), "Inter");
+    }
+    #[test]
+    fn title_layout_preserves_words_and_rejects_invalid_fonts() {
+        assert_eq!(two_line_title("얼음 온도가 종목마다 다른 이유").replace('\n', " "), "얼음 온도가 종목마다 다른 이유");
+        assert_eq!(two_line_title("짧은 제목"), "짧은 제목");
+        let mut j = job();
+        j.title_font.clear();
+        assert!(validate_job(&j).is_err());
+    }
+    #[test]
     fn translates_separate_microphone_time_to_camera_clock() {
         let groups = vec![vec![media(1, 0), media(2, 2 * TICKS_PER_SECOND), media(3, 3 * TICKS_PER_SECOND)]];
         let cuts = validate_plan(&job(), &groups, &plan()).unwrap();
@@ -408,7 +574,7 @@ mod tests {
         let mut j = job();
         j.groups.push(Group {
             name: "take2".into(),
-            cameras: vec![Source { path: "c.mp4".into(), label: String::new(), transcript: None }],
+            cameras: vec![Source { path: "c.mp4".into(), label: String::new(), transcript: None, caption_role: CaptionRole::Guest }],
             recordings: vec![],
             sync: "audio".into(),
         });

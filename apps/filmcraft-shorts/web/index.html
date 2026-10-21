@@ -161,6 +161,54 @@
                     </select></label
                   >
                 </div>
+                <div class="caption-controls">
+                  <label
+                    >자막 디자인<select id="caption-design">
+                      <option value="sotam">
+                        소탐대실 · 제목 / 제작진 / 게스트
+                      </option>
+                      <option value="standard">기본 자막</option>
+                    </select></label
+                  >
+                  <p class="muted">
+                    촬영본 목록에서 각 마이크의 자막 화자를 지정하세요. 같은
+                    녹음에 여러 화자가 섞여 있으면 자동으로 구별해 색을 바꾸지는
+                    않습니다.
+                  </p>
+                  <div class="options-row">
+                    <label class="option-box"
+                      >제목 글꼴<input
+                        id="title-font"
+                        list="installed-fonts"
+                        value="SDCheongRyu"
+                        maxlength="256" /></label
+                    ><label class="option-box"
+                      >말자막 글꼴<input
+                        id="dialogue-font"
+                        list="installed-fonts"
+                        value="GangwonEduAll-OTFBold"
+                        maxlength="256"
+                    /></label>
+                  </div>
+                  <datalist id="installed-fonts"></datalist>
+                  <p id="font-notice" class="muted">
+                    PSD 글꼴 설치 후 프로그램을 다시 실행하세요. 다른 글꼴을
+                    선택하면 모양이 달라집니다.
+                  </p>
+                  <div class="caption-sample" aria-label="자막 색상 예시">
+                    <strong>제목 · 이야기를 발견하는 순간</strong
+                    ><span class="crew-caption"
+                      >제작진 · 그때 어떤 생각이 들었나요?</span
+                    ><span class="guest-caption"
+                      >게스트 · 다시 시작해 보고 싶었어요.</span
+                    >
+                  </div>
+                  <p class="muted">
+                    확인한 PSD를 바탕으로 만든 스타일 프리셋입니다. 색상
+                    예시이며, 실제 글꼴·글자폭·자간은 출력 미리보기에서
+                    확인하세요.
+                  </p>
+                </div>
                 <div class="info-box">
                   <strong>완성본에 함께 담겨요</strong>
                   <p>
@@ -287,19 +335,34 @@
             <details>
               <summary>처음 사용하는 경우: 모델 준비 안내</summary>
               <p>
-                프로젝트 폴더의 터미널에서 아래 명령을 순서대로 실행하세요. 모델
-                다운로드가 차단되면 환경 설정의 다운로드 도메인을 먼저 적용해야
-                합니다.
+                웹 화면과 별도로 발언 선택용 AI 서버를 실행해야 합니다. 처음 한
+                번은 인터넷에서 실행 도구와 모델(약 3GB)을 내려받습니다. 영상과
+                대본은 전송하지 않습니다.
               </p>
-              <pre>
+              <div id="mac-model-help">
+                <p>
+                  <strong>맥:</strong> 프로젝트 폴더에서 새 터미널을 열고 다음
+                  명령을 실행하세요. Intel 맥은 CPU로 처리합니다.
+                </p>
+                <pre>bash apps/filmcraft-shorts/scripts/setup-mac-ai.sh</pre>
+                <p>준비가 끝나면 아래 명령을 실행하고 이 터미널도 켜 두세요.</p>
+                <pre>
+bash apps/filmcraft-shorts/scripts/start-local-model.sh</pre
+                >
+                <p>
+                  모델 로딩이 끝난 뒤 ‘준비 상태 다시 확인’을 누르세요. 오류가
+                  나오면 마지막 오류 내용을 확인하세요. macOS Monterey에서 설치
+                  도구와 모델을 직접 실행한 검증은 아직 남아 있습니다.
+                </p>
+              </div>
+              <div id="linux-model-help">
+                <p>Linux 클라우드 전용 도구:</p>
+                <pre>
 bash apps/filmcraft-shorts/scripts/setup-cloud.sh
 python3 apps/filmcraft-shorts/scripts/fetch-local-model.py
 bash apps/filmcraft-shorts/scripts/start-local-model.sh</pre
-              >
-              <p>
-                마지막 명령의 AI 서버를 켜둔 상태로 사용하세요. 영상과 대본은
-                로컬에서 처리됩니다.
-              </p>
+                >
+              </div>
             </details>
             <div class="info-box">
               <strong>현재 버전에서 알아두세요</strong>

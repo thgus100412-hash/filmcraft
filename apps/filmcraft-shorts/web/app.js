@@ -51,17 +51,21 @@ function saveDraft() {
         groups: state.groups,
         files: state.files
           .filter((f) => f.id)
-          .map(({ id, name, size, role, label, group }) => ({
+          .map(({ id, name, size, role, label, group, captionRole }) => ({
             id,
             name,
             size,
             role,
             label,
             group,
+            captionRole,
           })),
         brief: $("#brief").value,
         duration: $("#duration").value,
         speech: $("#speech-model").value,
+        captionDesign: $("#caption-design").value,
+        titleFont: $("#title-font").value,
+        dialogueFont: $("#dialogue-font").value,
       }),
     );
   } catch {
@@ -99,9 +103,16 @@ function restoreDraft() {
           key: `f${++nextFile}`,
           role: f.role === "recordings" ? "recordings" : "cameras",
           label: String(f.label || "").slice(0, 500),
+          captionRole: f.captionRole === "crew" ? "crew" : "guest",
           status: "ready",
           progress: 100,
         }));
+      $("#caption-design").value =
+        d.captionDesign === "standard" ? "standard" : "sotam";
+      if (typeof d.titleFont === "string")
+        $("#title-font").value = d.titleFont.slice(0, 256);
+      if (typeof d.dialogueFont === "string")
+        $("#dialogue-font").value = d.dialogueFont.slice(0, 256);
       $("#brief").value = String(d.brief || "").slice(0, 4000);
       if (["30", "45", "60", "90", "180"].includes(d.duration))
         $("#duration").value = d.duration;
@@ -284,6 +295,20 @@ function renderGroups() {
         saveDraft();
       });
       options.append(label);
+      options.append(
+        select(
+          [
+            ["guest", "말자막: 게스트 (노랑)"],
+            ["crew", "말자막: 제작진 (청록)"],
+          ],
+          f.captionRole || "guest",
+          (v) => {
+            f.captionRole = v;
+            saveDraft();
+          },
+          `${f.name} 자막 화자`,
+        ),
+      );
       card.append(options);
       if (f.status !== "ready") {
         const track = el("div", "upload-track");
@@ -371,6 +396,7 @@ function addFiles(files) {
       size: file.size,
       role,
       label: "",
+      captionRole: "guest",
       group: 0,
       status: "uploading",
       progress: 0,
@@ -400,13 +426,28 @@ async function checkHealth() {
     state.health = await api("/api/health");
     const h = state.health;
     const ready = h.model_ready && h.speech_available;
+    $("#mac-model-help").classList.toggle("hidden", h.platform === "linux");
+    $("#linux-model-help").classList.toggle("hidden", h.platform === "macos");
+    const fonts = (h.fonts || []).map((f) => f.family);
+    $("#installed-fonts").replaceChildren(
+      ...fonts.map((f) => {
+        const o = el("option");
+        o.value = f;
+        return o;
+      }),
+    );
+    updateFontNotice();
     $("#connection").textContent = ready
       ? "● 로컬 스튜디오 준비됨"
       : "○ 로컬 AI 준비 필요";
     $("#connection").classList.toggle("ready", ready);
     $("#readiness").textContent = ready
       ? "로컬 AI가 준비됐어요. 편집을 시작할 수 있습니다."
-      : "아직 편집을 시작할 수 없어요. 실행 환경에서 로컬 AI 준비 안내를 확인해 주세요.";
+      : !h.speech_available
+        ? "음성 인식 기능이 빠져 있습니다. Whisper 포함 빌드가 필요합니다."
+        : h.model_status === "model_mismatch"
+          ? "AI 서버는 응답하지만 interview-local 모델이 없습니다. 실행 환경의 모델 시작 명령을 확인해 주세요."
+          : "발언 선택용 로컬 AI가 아직 준비되지 않았습니다. 실행 환경에서 맥용 AI 준비·시작 명령을 실행해 주세요.";
     $("#readiness").classList.toggle("blocked", !ready);
     $("#start-job").disabled =
       !ready || state.jobs.some((j) => j.status === "running");
@@ -461,10 +502,18 @@ async function startJob() {
       sync: g.sync,
       cameras: state.files
         .filter((f) => f.group === i && f.role === "cameras")
-        .map((f) => ({ file_id: f.id, label: f.label })),
+        .map((f) => ({
+          file_id: f.id,
+          label: f.label,
+          caption_role: f.captionRole || "guest",
+        })),
       recordings: state.files
         .filter((f) => f.group === i && f.role === "recordings")
-        .map((f) => ({ file_id: f.id, label: f.label })),
+        .map((f) => ({
+          file_id: f.id,
+          label: f.label,
+          caption_role: f.captionRole || "guest",
+        })),
     }))
     .filter((g) => g.cameras.length || g.recordings.length);
   try {
@@ -473,6 +522,9 @@ async function startJob() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         brief,
+        caption_design: $("#caption-design").value,
+        title_font: $("#title-font").value.trim(),
+        dialogue_font: $("#dialogue-font").value.trim(),
         max_seconds: Number($("#duration").value),
         speech_model: $("#speech-model").value,
         groups,
@@ -804,3 +856,18 @@ loadHistory();
 setInterval(() => {
   if (!state.job || state.job.status !== "running") checkHealth();
 }, 15000);
+
+function updateFontNotice() {
+  const fonts = (state.health?.fonts || []).map((f) => f.family);
+  const missing = [$("#title-font").value, $("#dialogue-font").value].filter(
+    (f) => !fonts.includes(f),
+  );
+  $("#font-notice").textContent = missing.length
+    ? `설치된 글꼴 이름을 확인해 주세요: ${missing.join(", ")}. 없으면 대체 글꼴로 출력되어 PSD와 달라집니다. 글꼴 설치 후 서버를 다시 실행하거나 목록에서 실제 글꼴 이름을 선택하세요.`
+    : "선택한 글꼴을 찾았습니다. 실제 출력에서 글자폭과 줄바꿈을 확인하세요.";
+}
+for (const id of ["caption-design", "title-font", "dialogue-font"])
+  $("#" + id).addEventListener("change", () => {
+    saveDraft();
+    updateFontNotice();
+  });

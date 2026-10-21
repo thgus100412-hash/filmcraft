@@ -15,7 +15,13 @@ const webURL = process.env.SHORTS_WEB_URL || "http://127.0.0.1:8787";
   page.on("pageerror", (e) => errors.push(e.message));
   await page.route("**/api/health", (r) =>
     r.fulfill({
-      json: { model_ready: false, speech_available: true, speech_models: [] },
+      json: {
+        model_ready: false,
+        speech_available: true,
+        speech_models: [],
+        platform: "macos",
+        fonts: [],
+      },
     }),
   );
   await page.goto(webURL);
@@ -51,10 +57,14 @@ const webURL = process.env.SHORTS_WEB_URL || "http://127.0.0.1:8787";
   assert.equal(await page.locator(".group").count(), 2);
   await page.getByLabel("camera-wide.mp4 설명").fill("게스트 클로즈업");
   await page.getByLabel("guest.wav 설명").fill("게스트 핀 마이크");
+  await page.getByLabel("guest.wav 자막 화자").selectOption("crew");
   await page.getByRole("button", { name: "편집 방향 정하기" }).click();
   await page
     .locator("#brief")
     .fill("실패를 딛고 다시 시작한 경험을 담담하게 골라줘.");
+  assert.equal(await page.locator("#caption-design").inputValue(), "sotam");
+  await page.locator("#title-font").fill("Inter");
+  await page.locator("#title-font").dispatchEvent("change");
   await page.waitForTimeout(300);
   assert.equal(await page.locator("#start-job").isDisabled(), true);
   await page.screenshot({
@@ -63,6 +73,11 @@ const webURL = process.env.SHORTS_WEB_URL || "http://127.0.0.1:8787";
   });
   await page.reload();
   await page.getByLabel("camera-wide.mp4 설명").waitFor();
+  assert.equal(
+    await page.getByLabel("guest.wav 자막 화자").inputValue(),
+    "crew",
+  );
+  assert.equal(await page.locator("#title-font").inputValue(), "Inter");
   assert.equal(
     await page.getByLabel("camera-wide.mp4 설명").inputValue(),
     "게스트 클로즈업",
@@ -132,6 +147,20 @@ const webURL = process.env.SHORTS_WEB_URL || "http://127.0.0.1:8787";
   console.log(
     "Browser checks passed: upload, roles, grouping, brief, readiness, draft restore, history, result downloads, safe text, mobile layout.",
   );
+  await page.getByRole("button", { name: /실행 환경/ }).click();
+  await page
+    .getByText("처음 사용하는 경우: 모델 준비 안내", { exact: true })
+    .click();
+  assert.equal(await page.locator("#mac-model-help").isVisible(), true);
+  assert.equal(await page.locator("#linux-model-help").isVisible(), false);
+  assert.match(
+    await page.locator("#mac-model-help").textContent(),
+    /setup-mac-ai.sh/,
+  );
+  await page.screenshot({
+    path: "/tmp/filmcraft-shorts-mac-settings.png",
+    fullPage: true,
+  });
   await browser.close();
 })().catch((e) => {
   console.error(e);

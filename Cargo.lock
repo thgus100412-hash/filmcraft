@@ -2329,6 +2329,7 @@ dependencies = [
  "ctrlc",
  "filmcraft-engine",
  "filmcraft-project",
+ "filmcraft-text",
  "filmcraft-time",
  "percent-encoding",
  "rustls-rustcrypto",

@@ -47,6 +47,10 @@ struct App {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Input {
+    #[serde(default)]
+    caption_design: filmcraft_shorts::CaptionDesign,
+    title_font: Option<String>,
+    dialogue_font: Option<String>,
     brief: String,
     max_seconds: u32,
     speech_model: String,
@@ -63,6 +67,8 @@ struct InputGroup {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InputSource {
+    #[serde(default)]
+    caption_role: filmcraft_shorts::CaptionRole,
     file_id: String,
     label: String,
 }
@@ -158,10 +164,25 @@ fn record_json(app: &App, r: &Record) -> Value {
 }
 fn health() -> Value {
     let agent: ureq::Agent = ureq::Agent::config_builder().proxy(None).timeout_global(Some(Duration::from_secs(2))).build().into();
-    let model_ready = agent.get("http://127.0.0.1:8000/health").call().is_ok();
+    let server = agent.get("http://127.0.0.1:8000/health").call().is_ok();
+    let models: Value = agent
+        .get("http://127.0.0.1:8000/v1/models")
+        .call()
+        .ok()
+        .and_then(|mut r| r.body_mut().with_config().limit(65536).read_json().ok())
+        .unwrap_or(Value::Null);
+    let model_ready = server && models["data"].as_array().is_some_and(|a| a.iter().any(|m| m["id"] == "interview-local"));
+    let status = if model_ready {
+        "ready"
+    } else if server {
+        "model_mismatch"
+    } else {
+        "not_ready"
+    };
     let mut s = filmcraft_engine::Session::default();
     let speech = s.execute("transcript.models", json!({})).unwrap_or(Value::Null);
-    json!({"model_ready":model_ready,"speech_available":cfg!(feature="whisper"),"speech_models":speech["models"],"local_only":true})
+    let fonts = s.execute("fonts.list", json!({})).unwrap_or(Value::Null);
+    json!({"platform":std::env::consts::OS,"model_status":status,"fonts":fonts,"model_ready":model_ready,"speech_available":cfg!(feature="whisper"),"speech_models":speech["models"],"local_only":true})
 }
 fn upload(r: &mut Request, app: &App) -> ApiResult {
     let _guard = app.upload.try_lock().map_err(|_| (409, "다른 파일을 업로드 중입니다.".into()))?;
@@ -253,7 +274,7 @@ fn start_job(r: &mut Request, app: &App) -> ApiResult {
                     if !path.starts_with(app.root.join("uploads")) || !path.is_file() {
                         return Err((400, "잘못된 업로드 파일 경로입니다.".into()));
                     }
-                    Ok(json!({"path":path,"label":source.label}))
+                    Ok(json!({"path":path,"label":source.label,"caption_role":source.caption_role}))
                 })
                 .collect()
         };
@@ -261,7 +282,13 @@ fn start_job(r: &mut Request, app: &App) -> ApiResult {
         let recordings = resolve(&group.recordings)?;
         groups.push(json!({"name":group.name,"sync":group.sync,"cameras":cameras,"recordings":recordings}));
     }
-    let manifest = json!({"brief":input.brief,"max_seconds":input.max_seconds,"speech_model":input.speech_model,"groups":groups,"planner":{"url":"http://127.0.0.1:8000/v1/chat/completions","model":"interview-local"}});
+    let mut manifest = json!({"caption_design":input.caption_design,"brief":input.brief,"max_seconds":input.max_seconds,"speech_model":input.speech_model,"groups":groups,"planner":{"url":"http://127.0.0.1:8000/v1/chat/completions","model":"interview-local"}});
+    if let Some(font) = input.title_font {
+        manifest["title_font"] = json!(font);
+    }
+    if let Some(font) = input.dialogue_font {
+        manifest["dialogue_font"] = json!(font);
+    }
     let typed: filmcraft_shorts::Job = serde_json::from_value(manifest.clone()).map_err(|e| (400, e.to_string()))?;
     filmcraft_shorts::validate_job(&typed).map_err(|e| (400, e))?;
     if !["whisper-tiny", "whisper-base", "whisper-small"].contains(&typed.speech_model.as_str()) {

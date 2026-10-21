@@ -9,11 +9,23 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import urllib.request
 
 REPO = "Qwen/Qwen3-4B-Instruct-2507-GGUF"
 MODEL = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
-DEST = Path("/workspace/.local-model/models")
+DEFAULT_DEST = (Path.home() / "Library/Application Support/FilmcraftShorts/ai/models") if sys.platform == "darwin" else Path("/workspace/.local-model/models")
+DEST = Path(os.environ.get("FILMCRAFT_MODEL_DIR", str(DEFAULT_DEST)))
+
+
+def checksum(stream):
+    digest = hashlib.sha256()
+    while True:
+        block = stream.read(1024 * 1024)
+        if not block:
+            break
+        digest.update(block)
+    return digest.hexdigest()
 
 
 def fetch():
@@ -33,15 +45,17 @@ def fetch():
     target = DEST / MODEL
     if target.exists():
         with target.open("rb") as stream:
-            if target.stat().st_size == size and hashlib.file_digest(stream, "sha256").hexdigest() == expected:
+            if target.stat().st_size == size and checksum(stream) == expected:
                 print(target)
                 return
         raise RuntimeError("Existing model failed verification; preserved for investigation")
     partial = target.with_suffix(".gguf.part")
     if partial.exists():
         raise RuntimeError("Partial download exists; inspect before restarting")
+    print("Downloading local AI model ({:.1f} GB). Interview data are not uploaded.".format(size / 1e9), flush=True)
     digest = hashlib.sha256()
     received = 0
+    progress = -1
     try:
         with urllib.request.urlopen(f"https://huggingface.co/{REPO}/resolve/{revision}/{MODEL}", timeout=120) as response, partial.open("xb") as output:
             while chunk := response.read(1024 * 1024):
@@ -50,6 +64,10 @@ def fetch():
                     raise RuntimeError("Model exceeds authoritative size")
                 digest.update(chunk)
                 output.write(chunk)
+                current = received * 10 // size
+                if current != progress:
+                    progress = current
+                    print("{}%".format(min(100, current * 10)), flush=True)
         if received != size or digest.hexdigest() != expected:
             raise RuntimeError("Model size or SHA-256 mismatch")
         os.link(partial, target)  # Fail rather than replace an existing user file.

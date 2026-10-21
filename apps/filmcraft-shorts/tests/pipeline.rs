@@ -1,4 +1,5 @@
 //! FFmpeg generates synthetic fixtures only; FilmCraft performs all product operations.
+//! Style rendering uses bundled Inter and English text; user PSD font files are not distributed.
 use filmcraft_shorts::{Job, Plan, assemble, execute, prepare};
 use serde_json::json;
 use std::process::Command;
@@ -43,9 +44,9 @@ fn actual_multicam_sync_external_mic_and_burned_caption_export() {
     fixture(&["-ss", "0.5", "-i", "a.mov", "-t", "4", "-vn", "-c:a", "pcm_s16le", "host.wav"], &dir);
     let sec = filmcraft_time::TICKS_PER_SECOND;
     for (name, offset) in [("a", 0), ("b", sec / 2), ("guest", sec), ("host", sec / 2)] {
-        std::fs::write(dir.join(format!("{name}.json")),serde_json::to_vec(&json!({"language":"ko","words":[{"text":"실패했지만","start":2*sec-offset,"end":5*sec/2-offset},{"text":"다시 시작했어요.","start":5*sec/2-offset,"end":3*sec-offset}]})).unwrap()).unwrap();
+        std::fs::write(dir.join(format!("{name}.json")),serde_json::to_vec(&json!({"language":"en","words":[{"text":"I failed.","start":2*sec-offset,"end":5*sec/2-offset},{"text":"I tried again.","start":5*sec/2-offset,"end":3*sec-offset}]})).unwrap()).unwrap();
     }
-    let job_value = json!({"brief":"실패를 극복한 경험", "groups":[{"name":"interview","cameras":[{"path":"a.mov","transcript":"a.json"},{"path":"b.mov","transcript":"b.json"}],"recordings":[{"path":"guest.wav","label":"guest mic","transcript":"guest.json"},{"path":"host.wav","label":"host mic","transcript":"host.json"}]}],"planner":{"url":"http://127.0.0.1:1/v1/chat/completions","model":"test"}});
+    let job_value = json!({"caption_design":"sotam","title_font":"Inter","dialogue_font":"Inter","brief":"실패를 극복한 경험", "groups":[{"name":"interview","cameras":[{"path":"a.mov","transcript":"a.json"},{"path":"b.mov","transcript":"b.json"}],"recordings":[{"path":"guest.wav","label":"guest mic","transcript":"guest.json"},{"path":"host.wav","caption_role":"crew","label":"host mic","transcript":"host.json"}]}],"planner":{"url":"http://127.0.0.1:1/v1/chat/completions","model":"test"}});
     std::fs::write(dir.join("job.json"), serde_json::to_vec_pretty(&job_value).unwrap()).unwrap();
     let job: Job = serde_json::from_value(job_value).unwrap();
     let mut prepared = prepare(&job, &dir).unwrap();
@@ -53,16 +54,30 @@ fn actual_multicam_sync_external_mic_and_burned_caption_export() {
     assert!((starts[1] - starts[0] - sec / 2).abs() < sec / 30, "{starts:?}");
     assert!((starts[2] - starts[0] - sec).abs() < sec / 30, "{starts:?}");
     let plan: Plan = serde_json::from_value(
-        json!({"title":"다시 시작한 이유","segments":[{"group":0,"audio":2,"camera":1,"first_word":0,"last_word":0,"reason":"게스트의 발언"},{"group":0,"audio":3,"camera":0,"first_word":1,"last_word":1,"reason":"다른 마이크로 전환"}]}),
+        json!({"title":"Starting again","segments":[{"group":0,"audio":2,"camera":1,"first_word":0,"last_word":0,"reason":"게스트의 발언"},{"group":0,"audio":3,"camera":0,"first_word":1,"last_word":1,"reason":"다른 마이크로 전환"}]}),
     )
     .unwrap();
     assemble(&mut prepared, &job, &plan).unwrap();
+    let seq = prepared.session.active_sequence().unwrap();
+    assert_eq!(seq.caption_tracks.iter().filter(|t| t.enabled).count(), 3);
+    let guest = seq.caption_tracks.iter().find(|t| t.name == "말자막 게스트").unwrap();
+    let crew = seq.caption_tracks.iter().find(|t| t.name == "말자막 제작진").unwrap();
+    assert_eq!(guest.style.color, [255, 252, 0, 255]);
+    assert_eq!(crew.style.color, [62, 249, 255, 255]);
+    assert_eq!(guest.captions.len(), 1);
+    assert_eq!(crew.captions.len(), 1);
+    assert_eq!(guest.captions[0].text, "I failed.");
+    assert_eq!(crew.captions[0].text, "I tried again.");
+    assert!(guest.captions[0].end() <= crew.captions[0].start);
+    assert!(!seq.caption_tracks[0].enabled, "combined SRT track must not double-burn captions");
+    let title = seq.caption_tracks.iter().find(|t| t.name == "Title").unwrap();
+    assert_eq!(title.captions[0].duration.0, sec);
     let heard: Vec<_> = prepared.session.active_sequence().unwrap().audio_tracks.iter().flat_map(|t| t.items.iter().map(|c| c.item.0)).collect();
     assert_eq!(heard, vec![prepared.groups[0][2].item, prepared.groups[0][3].item], "only the selected microphone for each turn is audible");
     execute(&mut prepared.session, "file.saveAs", json!({"path":dir.join("short.fcproj")})).unwrap();
     execute(&mut prepared.session, "captions.export", json!({"path":dir.join("captions.srt"),"track":"C1"})).unwrap();
     let srt = std::fs::read_to_string(dir.join("captions.srt")).unwrap();
-    assert!(srt.contains("실패했지만"), "{srt}");
+    assert!(srt.contains("I failed.") && srt.contains("I tried again."), "{srt}");
     let result = execute(
         &mut prepared.session,
         "file.exportMedia",
@@ -77,9 +92,10 @@ fn actual_multicam_sync_external_mic_and_burned_caption_export() {
     let streams = info["streams"].as_array().unwrap();
     assert!(streams.iter().any(|v| v["codec_type"] == "video" && v["width"] == 108 && v["height"] == 192));
     assert!(streams.iter().any(|v| v["codec_type"] == "audio"));
-    execute(&mut prepared.session, "file.exportFrame", json!({"path":dir.join("with-captions.png"),"seconds":0.5})).unwrap();
+    execute(&mut prepared.session, "file.exportFrame", json!({"path":dir.join("with-captions.png"),"time":sec/4})).unwrap();
+    execute(&mut prepared.session, "file.exportFrame", json!({"path":dir.join("crew-captions.png"),"time":3*sec/4})).unwrap();
     execute(&mut prepared.session, "captions.hideAll", json!({})).unwrap();
-    execute(&mut prepared.session, "file.exportFrame", json!({"path":dir.join("without-captions.png"),"seconds":0.5})).unwrap();
+    execute(&mut prepared.session, "file.exportFrame", json!({"path":dir.join("without-captions.png"),"time":sec/4})).unwrap();
     assert_ne!(
         std::fs::read(dir.join("with-captions.png")).unwrap(),
         std::fs::read(dir.join("without-captions.png")).unwrap(),
@@ -96,7 +112,7 @@ fn actual_multicam_sync_external_mic_and_burned_caption_export() {
         .unwrap();
     assert!(cli.status.success(), "CLI: {}", String::from_utf8_lossy(&cli.stderr));
     assert!(dir.join("cli-output/short.mp4").is_file());
-    assert!(std::fs::read_to_string(dir.join("cli-output/captions.srt")).unwrap().contains("실패했지만"));
+    assert!(std::fs::read_to_string(dir.join("cli-output/captions.srt")).unwrap().contains("I failed."));
     // Keep the current-run artifacts for visual inspection / debugging.
     eprintln!("verified fixture outputs: {}", dir.display());
 }
