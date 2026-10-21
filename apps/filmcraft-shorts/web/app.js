@@ -428,14 +428,6 @@ async function checkHealth() {
     const ready = h.model_ready && h.speech_available;
     $("#mac-model-help").classList.toggle("hidden", h.platform === "linux");
     $("#linux-model-help").classList.toggle("hidden", h.platform === "macos");
-    const fonts = (h.fonts || []).map((f) => f.family);
-    $("#installed-fonts").replaceChildren(
-      ...fonts.map((f) => {
-        const o = el("option");
-        o.value = f;
-        return o;
-      }),
-    );
     updateFontNotice();
     $("#connection").textContent = ready
       ? "● 로컬 스튜디오 준비됨"
@@ -857,15 +849,84 @@ setInterval(() => {
   if (!state.job || state.job.status !== "running") checkHealth();
 }, 15000);
 
+let fontCatalog = null;
+async function refreshFonts() {
+  $("#refresh-fonts").disabled = true;
+  $("#font-status").textContent = "활성 글꼴을 읽고 있습니다…";
+  try {
+    const result = await api("/api/fonts");
+    if (result.error) throw new Error(result.error);
+    fontCatalog = result;
+    $("#installed-fonts").replaceChildren(
+      ...result.fonts.map((f) => {
+        const option = el("option");
+        option.value = f.family;
+        return option;
+      }),
+    );
+    $("#font-status").textContent =
+      `${result.fonts.length}개 글꼴을 찾았습니다.` +
+      (result.unavailable
+        ? ` 보호되었거나 읽을 수 없는 글꼴 ${result.unavailable}개는 제외했습니다.`
+        : "") +
+      (result.warning || "");
+    updateFontNotice();
+  } catch (error) {
+    fontCatalog = null;
+    $("#installed-fonts").replaceChildren();
+    $("#font-status").textContent = error.message;
+    updateFontNotice();
+  } finally {
+    $("#refresh-fonts").disabled = false;
+  }
+}
 function updateFontNotice() {
-  const fonts = (state.health?.fonts || []).map((f) => f.family);
+  if (!fontCatalog) {
+    $("#font-notice").textContent =
+      "글꼴 목록을 새로고침해 활성 상태를 확인하세요.";
+    return;
+  }
+  const names = [
+    ...fontCatalog.fonts.map((f) => f.family),
+    ...Object.keys(fontCatalog.aliases || {}),
+  ].map((n) => n.toLowerCase());
   const missing = [$("#title-font").value, $("#dialogue-font").value].filter(
-    (f) => !fonts.includes(f),
+    (f) => !names.includes(f.toLowerCase()),
   );
   $("#font-notice").textContent = missing.length
-    ? `설치된 글꼴 이름을 확인해 주세요: ${missing.join(", ")}. 없으면 대체 글꼴로 출력되어 PSD와 달라집니다. 글꼴 설치 후 서버를 다시 실행하거나 목록에서 실제 글꼴 이름을 선택하세요.`
-    : "선택한 글꼴을 찾았습니다. 실제 출력에서 글자폭과 줄바꿈을 확인하세요.";
+    ? `활성 목록에서 찾지 못한 글꼴: ${missing.join(", ")}. 산돌구름에서 활성화하고 목록을 새로고침한 뒤 실제 이름을 선택하세요.`
+    : "선택한 글꼴을 찾았습니다. 한국어 출력 검사로 자막 사용 가능 여부를 확인하세요.";
 }
+$("#refresh-fonts").addEventListener("click", refreshFonts);
+$("#check-fonts").addEventListener("click", async () => {
+  $("#check-fonts").disabled = true;
+  $("#font-status").textContent =
+    "선택한 글꼴로 한국어 자막을 그려보고 있습니다…";
+  const messages = [];
+  try {
+    for (const name of new Set([
+      $("#title-font").value.trim(),
+      $("#dialogue-font").value.trim(),
+    ])) {
+      const result = await api("/api/fonts/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ font: name }),
+      });
+      messages.push(
+        result.error
+          ? `${name}: ${result.error}`
+          : `${result.family}: 한국어 출력 검사 통과`,
+      );
+    }
+    $("#font-status").textContent = messages.join(" / ");
+  } catch (error) {
+    $("#font-status").textContent = error.message;
+  } finally {
+    $("#check-fonts").disabled = false;
+  }
+});
+refreshFonts();
 for (const id of ["caption-design", "title-font", "dialogue-font"])
   $("#" + id).addEventListener("change", () => {
     saveDraft();

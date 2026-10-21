@@ -6,6 +6,16 @@ use std::path::Path;
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "--fonts" || a == "--check-font") {
+        let report = if args.first().is_some_and(|a| a == "--fonts") {
+            filmcraft_shorts::active_fonts::catalog().and_then(|c| serde_json::to_value(c).map_err(|e| e.to_string()))
+        } else {
+            filmcraft_shorts::active_fonts::check(args.get(1).ok_or("missing font name")?)
+        };
+        let value = report.unwrap_or_else(|error| json!({"error":error}));
+        writeln!(std::io::stdout(), "{value}").map_err(|e| e.to_string())?;
+        return Ok(());
+    }
     if args.is_empty() || args.first().is_some_and(|a| a == "--help") {
         writeln!(std::io::stdout(), "filmcraft-shorts <job.json> <new-output-directory> [--render]\nfilmcraft-shorts <job.json> <new-output-directory> --plan <plan.json> [--render]\nPaths in job.json are relative to that file. Without --plan, call the configured LLM.\nPlanner must be local (localhost or 127.0.0.1); remote transcript transmission is disabled.\nBuild with --features whisper for automatic Korean transcription.\nOutput directory must not exist; original media are never modified.").map_err(|e| e.to_string())?;
         return Ok(());

@@ -379,6 +379,16 @@ fn route(r: &mut Request, app: &App) -> ApiResult {
         ("GET", "/") => Ok(reply(200, include_str!("../../web/index.html"), "text/html; charset=utf-8")),
         ("GET", "/app.css") => Ok(reply(200, include_str!("../../web/app.css"), "text/css; charset=utf-8")),
         ("GET", "/app.js") => Ok(reply(200, include_str!("../../web/app.js"), "text/javascript; charset=utf-8")),
+        ("GET", "/api/fonts") => {
+            let value = filmcraft_shorts::active_fonts::probe(&app.worker, &["--fonts"]).map_err(|e| (503, e))?;
+            Ok(json_reply(200, value))
+        }
+        ("POST", "/api/fonts/check") => {
+            let input: Value = json_body(r)?;
+            let name = input["font"].as_str().filter(|s| !s.trim().is_empty() && s.len() <= 256).ok_or((400, "글꼴 이름을 확인해 주세요.".into()))?;
+            let value = filmcraft_shorts::active_fonts::probe(&app.worker, &["--check-font", name]).map_err(|e| (503, e))?;
+            Ok(json_reply(200, value))
+        }
         ("GET", "/api/health") => Ok(json_reply(200, health())),
         ("POST", "/api/files") => upload(r, app),
         ("POST", "/api/jobs") => start_job(r, app),

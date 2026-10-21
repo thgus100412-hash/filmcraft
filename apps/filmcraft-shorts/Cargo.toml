@@ -25,3 +25,7 @@ rustls-rustcrypto = { version = "0.0.2-alpha", optional = false }
 tiny_http = "0.12"
 percent-encoding = "2"
 ctrlc = { version = "3", features = ["termination"] }
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+font-kit = { version = "0.14", default-features = false, features = ["source"] }

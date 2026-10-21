@@ -40,6 +40,10 @@ fn uploads_jobs_cancellation_results_ranges_and_origin_boundaries() {
         &worker,
         r#"#!/usr/bin/env python3
 import pathlib,sys,time,json
+if sys.argv[1]=='--fonts':
+ print(json.dumps({'native_registry':True,'fonts':[{'family':'Test Active','styles':['Regular'],'source':'macos-active'}],'aliases':{},'unavailable':0,'warning':None}));sys.exit(0)
+if sys.argv[1]=='--check-font':
+ print(json.dumps({'error':'unavailable'}));sys.exit(0)
 out=pathlib.Path(sys.argv[2]);out.mkdir()
 print('[shorts-stage] rendering',file=sys.stderr,flush=True)
 time.sleep(0.6)
@@ -70,6 +74,14 @@ for name in ('short.mp4','captions.srt','short.fcproj'):(out/name).write_bytes(b
         }
         std::thread::sleep(Duration::from_millis(30));
     }
+    let (_, fonts) = get(&format!("{base}/api/fonts"));
+    assert_eq!(fonts["fonts"][0]["family"], "Test Active");
+    assert_eq!(post(&format!("{base}/api/fonts/check"), json!({"font":""})).0, 400);
+    assert_eq!(post(&format!("{base}/api/fonts/check"), json!({"font":"x".repeat(257)})).0, 400);
+    assert_eq!(post(&format!("{base}/api/fonts/check"), json!({"font":"Test Active"})).1["error"], "unavailable");
+    let forbidden_font =
+        agent().post(format!("{base}/api/fonts/check")).header("Origin", "https://other.example").send_json(json!({"font":"Test Active"})).unwrap();
+    assert_eq!(forbidden_font.status().as_u16(), 403);
     let response = agent().get(&base).call().unwrap();
     assert_eq!(response.status().as_u16(), 200);
     let forbidden = agent().post(format!("{base}/api/jobs")).header("Origin", "https://other.example").send_json(json!({})).unwrap();
@@ -130,4 +142,14 @@ for name in ('short.mp4','captions.srt','short.fcproj'):(out/name).write_bytes(b
 
     assert!(running.root.join("data/uploads").is_dir());
     let _ = std::io::stderr().write_all(format!("web test artifacts: {}\n", running.root.display()).as_bytes());
+}
+
+#[test]
+fn font_helper_reports_catalog_and_rejects_missing_font_without_paths() {
+    let worker = std::path::Path::new(env!("CARGO_BIN_EXE_filmcraft-shorts"));
+    let catalog = filmcraft_shorts::active_fonts::probe(worker, &["--fonts"]).unwrap();
+    assert!(catalog["fonts"].is_array());
+    assert!(!catalog.to_string().contains(".ttf"));
+    let check = filmcraft_shorts::active_fonts::probe(worker, &["--check-font", "Definitely Missing Font 123"]).unwrap();
+    assert!(check["error"].is_string());
 }

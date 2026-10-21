@@ -24,6 +24,32 @@ const webURL = process.env.SHORTS_WEB_URL || "http://127.0.0.1:8787";
       },
     }),
   );
+  let activeFonts = ["SDCheongRyu", "GangwonEduAll-OTFBold"];
+  await page.route("**/api/fonts", (r) =>
+    r.fulfill({
+      json: {
+        native_registry: true,
+        fonts: activeFonts.map((family) => ({
+          family,
+          styles: ["Regular"],
+          source: "macos-active",
+        })),
+        aliases: {},
+        unavailable: 0,
+        warning: null,
+      },
+    }),
+  );
+  await page.route("**/api/fonts/check", (r) => {
+    assert.match(r.request().headers()["content-type"], /application\/json/);
+    return r.fulfill({
+      json: {
+        family: JSON.parse(r.request().postData()).font,
+        korean: true,
+        rasterized: true,
+      },
+    });
+  });
   await page.goto(webURL);
   await page
     .getByRole("heading", { name: "긴 대화 속, 빛나는 이야기." })
@@ -63,6 +89,24 @@ const webURL = process.env.SHORTS_WEB_URL || "http://127.0.0.1:8787";
     .locator("#brief")
     .fill("실패를 딛고 다시 시작한 경험을 담담하게 골라줘.");
   assert.equal(await page.locator("#caption-design").inputValue(), "sotam");
+  await page.locator("#check-fonts").click();
+  await page.getByText(/한국어 출력 검사 통과/).waitFor();
+  activeFonts = ["GangwonEduAll-OTFBold"];
+  await page.locator("#refresh-fonts").click();
+  await page.waitForFunction(() =>
+    document
+      .querySelector("#font-notice")
+      .textContent.includes("활성 목록에서 찾지 못한 글꼴"),
+  );
+  assert.equal(await page.locator("#title-font").inputValue(), "SDCheongRyu");
+  activeFonts.push("SDCheongRyu");
+  await page.locator("#refresh-fonts").click();
+  await page.waitForFunction(() =>
+    document
+      .querySelector("#font-notice")
+      .textContent.includes("선택한 글꼴을 찾았습니다"),
+  );
+
   await page.locator("#title-font").fill("Inter");
   await page.locator("#title-font").dispatchEvent("change");
   await page.waitForTimeout(300);

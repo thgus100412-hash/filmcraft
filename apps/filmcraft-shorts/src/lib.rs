@@ -1,6 +1,8 @@
 //! Automatic editorial planning uses word ids, never model-invented timecodes or captions.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
+pub mod active_fonts;
+
 use filmcraft_engine::Session;
 use filmcraft_project::{ItemId, Transcript};
 use filmcraft_time::TICKS_PER_SECOND;
@@ -353,6 +355,17 @@ pub fn validate_plan(job: &Job, groups: &[Vec<Media>], plan: &Plan) -> Result<Ve
 /// One selected microphone at a time; camera scratch tracks and other mics are absent.
 pub fn assemble(prepared: &mut Prepared, job: &Job, plan: &Plan) -> Result<()> {
     let cuts = validate_plan(job, &prepared.groups, plan)?;
+    let active = active_fonts::catalog()?;
+    let requested_title = if active.native_registry && job.caption_design == CaptionDesign::Sotam {
+        active_fonts::resolve_requested(&job.title_font, &active)?
+    } else {
+        job.title_font.clone()
+    };
+    let requested_dialogue = if active.native_registry && job.caption_design == CaptionDesign::Sotam {
+        active_fonts::resolve_requested(&job.dialogue_font, &active)?
+    } else {
+        job.dialogue_font.clone()
+    };
     let (title_face, dialogue_face) = if job.caption_design == CaptionDesign::Sotam {
         let dialogue = plan
             .segments
@@ -369,7 +382,7 @@ pub fn assemble(prepared: &mut Prepared, job: &Job, plan: &Plan) -> Result<()> {
                 text.push(' ');
                 Ok(text)
             })?;
-        (caption_font(&job.title_font, &plan.title)?, caption_font(&job.dialogue_font, &dialogue)?)
+        (caption_font(&requested_title, &plan.title)?, caption_font(&requested_dialogue, &dialogue)?)
     } else {
         (job.title_font.clone(), job.dialogue_font.clone())
     };
@@ -466,6 +479,13 @@ pub fn assemble(prepared: &mut Prepared, job: &Job, plan: &Plan) -> Result<()> {
 
 /// Never export missing-glyph boxes when a PSD font is unavailable on the machine.
 fn caption_font(requested: &str, text: &str) -> Result<String> {
+    if cfg!(target_os = "macos") {
+        let resolved = filmcraft_text::resolve(requested, "SemiBold");
+        if resolved.missing || !filmcraft_text::fonts::face(resolved.face).covers_text(text) {
+            return Err(format!("선택한 글꼴 `{requested}`로 자막의 모든 글자를 표시할 수 없습니다. 다른 활성 글꼴을 선택하세요."));
+        }
+        return Ok(requested.into());
+    }
     filmcraft_text::fonts::scan_system();
     for name in [requested, "Apple SD Gothic Neo", "AppleGothic", "Noto Sans CJK KR", "Noto Sans KR", "Malgun Gothic"] {
         let resolved = filmcraft_text::resolve(name, "SemiBold");
