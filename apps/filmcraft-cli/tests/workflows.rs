@@ -189,9 +189,11 @@ const FH: usize = 60;
 /// Every video frame of `input`, scaled to 80×60 in `pix_fmt` (`gray` or `rgb24`). `vf` goes
 /// first in the filter chain (e.g. `fps=30` to see a VFR file as an editor shows it).
 fn frames(ffmpeg: &Path, input: &str, vf: Option<&str>, pix_fmt: &str) -> Vec<Vec<u8>> {
+    // Compare displayed pixels: an untagged SD source and a Rec.709 export can have
+    // matching RGB but different Y planes. Convert through RGB before grayscale.
     let chain = match vf {
-        Some(f) => format!("{f},scale={FW}:{FH}:flags=area,format={pix_fmt}"),
-        None => format!("scale={FW}:{FH}:flags=area,format={pix_fmt}"),
+        Some(f) => format!("{f},format=rgb24,scale={FW}:{FH}:flags=area,format={pix_fmt}"),
+        None => format!("format=rgb24,scale={FW}:{FH}:flags=area,format={pix_fmt}"),
     };
     let bpp = if pix_fmt == "gray" { 1 } else { 3 };
     let raw = ffmpeg_raw(ffmpeg, &[], input, &["-map", "0:v:0", "-vf", &chain, "-fps_mode", "passthrough", "-f", "rawvideo"]);

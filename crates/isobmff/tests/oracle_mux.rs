@@ -212,7 +212,10 @@ fn aac_priming_edit() {
     let data = std::fs::read(&src).unwrap();
     let f = open(data.as_slice()).unwrap();
     let t = &f.tracks[0];
-    let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+    // Keep the edit duration exact in audio ticks rather than rounding to milliseconds.
+    let mut opts = WriterOptions::new(Brand::Mp4);
+    opts.movie_timescale = t.timescale;
+    let mut w = Mp4Writer::new(Cursor::new(Vec::new()), opts).unwrap();
     let mut cfg = TrackConfig::new(t.entries[0].clone(), t.timescale);
     cfg.media_start = Some(1024);
     let k = w.add_track(cfg).unwrap();
@@ -225,7 +228,10 @@ fn aac_priming_edit() {
     decode_clean(&out);
     let pk = packets(&out);
     assert_eq!(int(&pk[0]["pts"]), Some(-1024));
-    assert_eq!(int(&streams(&out)[0]["duration_ts"]), int(&streams(&src)[0]["duration_ts"]));
+    // media_start skips priming and spans the remaining encoded media; it does not
+    // copy the source's separate edit that may trim encoder padding at the tail.
+    let encoded_ticks: u64 = t.samples.iter().map(|s| u64::from(s.duration)).sum();
+    assert_eq!(int(&streams(&out)[0]["duration_ts"]), Some((encoded_ticks - 1024) as i64));
 }
 
 #[test]

@@ -472,3 +472,7 @@ Forks and modified versions must remove them.
 ## Star history
 
 [![Star History Chart](https://api.star-history.com/svg?repos=storytold/filmcraft&type=Date&legend=top-left)](https://www.star-history.com/?repos=storytold%2Ffilmcraft&type=date&legend=top-left)
+
+## Interview shorts automation
+
+[FilmCraft Shorts](apps/filmcraft-shorts/README.md) adds a local browser application and headless Korean interview workflow: grouped multi-camera/audio synchronization, local-model editorial planning, independent camera/microphone routing, original-word captions, and vertical exports. See its README for setup, test scope, and current limitations.

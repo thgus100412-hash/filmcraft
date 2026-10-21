@@ -28,7 +28,7 @@ pub struct Tokenizer {
 }
 
 /// GPT-2's byte → printable character table, inverted.
-fn unicode_to_byte() -> HashMap<char, u8> {
+fn unicode_to_byte() -> Result<HashMap<char, u8>, SpeechError> {
     let mut bs: Vec<u32> = (b'!' as u32..=b'~' as u32).chain(0xA1..=0xAC).chain(0xAE..=0xFF).collect();
     let mut cs = bs.clone();
     let mut n = 0;
@@ -39,7 +39,10 @@ fn unicode_to_byte() -> HashMap<char, u8> {
             n += 1;
         }
     }
-    bs.iter().zip(&cs).map(|(&b, &c)| (char::from_u32(c).expect("valid"), b as u8)).collect()
+    bs.iter()
+        .zip(&cs)
+        .map(|(&b, &c)| char::from_u32(c).map(|ch| (ch, b as u8)).ok_or_else(|| SpeechError::Model("invalid byte alphabet scalar".into())))
+        .collect()
 }
 
 impl Tokenizer {
@@ -47,7 +50,7 @@ impl Tokenizer {
         let bad = |m: &str| SpeechError::Model(format!("tokenizer.json: {m}"));
         let v: serde_json::Value = serde_json::from_str(json).map_err(|e| bad(&e.to_string()))?;
         let vocab = v["model"]["vocab"].as_object().ok_or_else(|| bad("no model.vocab"))?;
-        let table = unicode_to_byte();
+        let table = unicode_to_byte()?;
         let max = vocab.values().filter_map(|x| x.as_u64()).max().unwrap_or(0) as usize;
         let mut bytes = vec![Vec::new(); max + 1];
         for (tok, id) in vocab {
@@ -163,4 +166,19 @@ pub fn group_words(tok: &Tokenizer, ids: &[u32]) -> Vec<(String, std::ops::Range
         groups.push((pre, start..ids.len()));
     }
     groups.into_iter().map(|(b, r)| (String::from_utf8_lossy(&b).trim().to_string(), r)).filter(|(t, _)| !t.is_empty()).collect()
+}
+
+#[cfg(test)]
+mod byte_alphabet_tests {
+    #[test]
+    fn all_bytes_and_gpt2_whitespace_mappings_are_preserved() {
+        let table = super::unicode_to_byte().unwrap();
+        assert_eq!(table.len(), 256);
+        let mut bytes: Vec<_> = table.values().copied().collect();
+        bytes.sort_unstable();
+        assert_eq!(bytes, (0..=255u8).collect::<Vec<_>>());
+        assert_eq!(table.get(&'Ġ'), Some(&b' '));
+        assert_eq!(table.get(&'Ċ'), Some(&b'\n'));
+        assert_eq!(table.get(&'!'), Some(&b'!'));
+    }
 }

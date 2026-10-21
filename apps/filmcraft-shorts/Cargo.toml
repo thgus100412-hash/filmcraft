@@ -1,0 +1,26 @@
+[package]
+name = "filmcraft-shorts"
+description = "Topic-directed, synchronized interview shorts on the FilmCraft engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+whisper = ["filmcraft-engine/whisper", "filmcraft-engine/speech-download"]
+
+[dependencies]
+filmcraft-engine = { workspace = true }
+filmcraft-project = { workspace = true }
+filmcraft-time = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ureq = { version = "3", default-features = false, features = ["json", "rustls-no-provider", "platform-verifier"] }
+rustls-rustcrypto = { version = "0.0.2-alpha", optional = false }
+tiny_http = "0.12"
+percent-encoding = "2"
+ctrlc = { version = "3", features = ["termination"] }

@@ -19,3 +19,5 @@ Implemented from the published description of the model: A. Radford et al., "Rob
 Recognition via Large-Scale Weak Supervision" (OpenAI, 2022), the model cards and configuration
 files published with the weights (`config.json`, `generation_config.json`, `tokenizer.json`), and
 the candle tensor library's public API. Weights: OpenAI Whisper, MIT licence.
+
+Whisper byte-alphabet construction propagates invalid Unicode scalar errors instead of panicking; a unit test checks all 256 byte mappings and the GPT-2 whitespace entries.

@@ -1,0 +1,55 @@
+{
+  "brief": "실패를 극복하고 다시 시작한 경험을 담담하고 진솔한 뉘앙스로 골라줘. 자극적인 과장이나 문맥 왜곡 없이 45초 이내로 만들어줘.",
+  "max_seconds": 45,
+  "speech_model": "whisper-small",
+  "planner": {
+    "url": "http://127.0.0.1:8000/v1/chat/completions",
+    "model": "interview-local"
+  },
+  "groups": [
+    {
+      "name": "인터뷰 첫 번째 테이크",
+      "sync": "audio",
+      "cameras": [
+        {
+          "path": "media/take1-wide.mp4",
+          "label": "두 사람을 함께 담은 와이드"
+        },
+        {
+          "path": "media/take1-guest.mp4",
+          "label": "게스트 클로즈업"
+        }
+      ],
+      "recordings": [
+        {
+          "path": "media/take1-guest.wav",
+          "label": "게스트 핀 마이크"
+        },
+        {
+          "path": "media/take1-host.wav",
+          "label": "진행자 핀 마이크"
+        }
+      ]
+    },
+    {
+      "name": "인터뷰 두 번째 테이크",
+      "sync": "audio",
+      "cameras": [
+        {
+          "path": "media/take2-wide.mp4",
+          "label": "와이드"
+        },
+        {
+          "path": "media/take2-guest.mp4",
+          "label": "게스트 클로즈업"
+        }
+      ],
+      "recordings": [
+        {
+          "path": "media/take2-guest.wav",
+          "label": "게스트 핀 마이크"
+        }
+      ]
+    }
+  ]
+}

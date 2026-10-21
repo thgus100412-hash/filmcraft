@@ -175,3 +175,11 @@ Ranked; detail and "done when" in [docs/roadmap.md](docs/roadmap.md) and [docs/g
 | 2026-10-10 | major | Restructured to the craftrules progress-docs shape: stage banner, headline numbers, dimension / feature / language tables, upcoming; re-measured against Premiere 26.5.2 (breadth ~87 → ~86%, ready ~50–60% → ~55%); honest assessment and scorecard moved to docs/target-app-parity.md, "Where we are lacking" to docs/gaps.md, milestones to docs/roadmap.md, interface localization to docs/localization-parity.md |
 | 2026-10-08 | minor | Log entries for HEVC export, Source playback and range dragging |
 | 2026-10-05 | major | Honest assessment added: checklist ~87% vs ready for real work ~50–60% |
+
+## Interview shorts application — 2026-10-20
+
+`apps/filmcraft-shorts` adds a headless interview workflow over the existing engine: per-take multi-camera/audio synchronization, local-only editorial planning, independently selected picture/microphone sources, verbatim transcript captions, titles and vertical export. Synthetic integration coverage includes two cameras, two WAV recordings, microphone switching, caption pixels and CLI MP4 output. This is separate from the editor parity estimates above; real Korean ASR/editorial quality is unmeasured, and local model downloads remain blocked by environment network policy. See the [application README](apps/filmcraft-shorts/README.md) for evidence and limitations.
+
+### Local browser studio — 2026-10-21
+
+FilmCraft Shorts now includes a Rust HTTP service and responsive Korean browser workflow for uploads, shooting groups, editorial briefs, actual worker stages/cancellation, job history, preview and downloads. Browser readiness checks expose missing local-model prerequisites; the UI does not claim real ASR or editorial validation. HTTP tests use a mock worker for orchestration and existing engine tests cover actual media output. See the application README for launch commands and limits.
