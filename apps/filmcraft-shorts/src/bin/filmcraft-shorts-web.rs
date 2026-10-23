@@ -48,9 +48,12 @@ struct App {
 #[serde(deny_unknown_fields)]
 struct Input {
     #[serde(default)]
+    caption_template: Option<filmcraft_shorts::psd_style::Template>,
+    #[serde(default)]
     caption_design: filmcraft_shorts::CaptionDesign,
     title_font: Option<String>,
     dialogue_font: Option<String>,
+    crew_font: Option<String>,
     brief: String,
     max_seconds: u32,
     speech_model: String,
@@ -289,6 +292,12 @@ fn start_job(r: &mut Request, app: &App) -> ApiResult {
     if let Some(font) = input.dialogue_font {
         manifest["dialogue_font"] = json!(font);
     }
+    if let Some(font) = input.crew_font {
+        manifest["crew_font"] = json!(font);
+    }
+    if let Some(template) = input.caption_template {
+        manifest["caption_template"] = serde_json::to_value(template).map_err(err)?;
+    }
     let typed: filmcraft_shorts::Job = serde_json::from_value(manifest.clone()).map_err(|e| (400, e.to_string()))?;
     filmcraft_shorts::validate_job(&typed).map_err(|e| (400, e))?;
     if !["whisper-tiny", "whisper-base", "whisper-small"].contains(&typed.speech_model.as_str()) {
@@ -379,6 +388,19 @@ fn route(r: &mut Request, app: &App) -> ApiResult {
         ("GET", "/") => Ok(reply(200, include_str!("../../web/index.html"), "text/html; charset=utf-8")),
         ("GET", "/app.css") => Ok(reply(200, include_str!("../../web/app.css"), "text/css; charset=utf-8")),
         ("GET", "/app.js") => Ok(reply(200, include_str!("../../web/app.js"), "text/javascript; charset=utf-8")),
+        ("POST", "/api/caption-template") => {
+            let length = r.body_length().filter(|n| *n > 0 && *n <= 128 * 1024 * 1024).ok_or((413, "PSD는 128MB 이하로 올려주세요.".into()))?;
+            let mut bytes = Vec::new();
+            r.as_reader().take(128 * 1024 * 1024 + 1).read_to_end(&mut bytes).map_err(err)?;
+            if bytes.len() != length {
+                return Err((400, "PSD 업로드가 중단됐습니다.".into()));
+            }
+            let template = filmcraft_shorts::psd_style::parse(&bytes).map_err(|e| (422, e))?;
+            Ok(json_reply(
+                200,
+                json!({"template":template,"notice":"텍스트 레이어의 글꼴·색상·크기·세로 위치·단색 테두리를 적용합니다. 글꼴은 Mac에서 활성화해야 합니다. 자간·복합 효과·픽셀 단위 일치는 지원하지 않습니다."}),
+            ))
+        }
         ("GET", "/api/fonts") => {
             let value = filmcraft_shorts::active_fonts::probe(&app.worker, &["--fonts"]).map_err(|e| (503, e))?;
             Ok(json_reply(200, value))

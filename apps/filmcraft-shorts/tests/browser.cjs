@@ -107,6 +107,63 @@ const webURL = process.env.SHORTS_WEB_URL || "http://127.0.0.1:8787";
       .textContent.includes("선택한 글꼴을 찾았습니다"),
   );
 
+  let rejectPSD = false;
+  const baseStyle = {
+    font: "GangwonEduAll-OTFBold",
+    size: 51.8,
+    color: "#fffc00",
+    margin: 0.31,
+    outline: 1.7,
+    outline_color: "#000000",
+    line_spacing: 1.2,
+  };
+  await page.route("**/api/caption-template", (r) =>
+    r.fulfill(
+      rejectPSD
+        ? {
+            status: 422,
+            json: { error: "편집 가능한 텍스트 레이어가 필요합니다." },
+          }
+        : {
+            json: {
+              template: {
+                title: {
+                  ...baseStyle,
+                  font: "SDCheongRyu",
+                  color: "#3ef9ff",
+                  size: 67.5,
+                  margin: 0.07,
+                },
+                guest: baseStyle,
+                crew: { ...baseStyle, color: "#3ef9ff" },
+              },
+              notice: "텍스트 스타일을 적용합니다.",
+            },
+          },
+    ),
+  );
+  await page
+    .locator("#caption-psd")
+    .setInputFiles({
+      name: "captions.psd",
+      mimeType: "image/vnd.adobe.photoshop",
+      buffer: Buffer.from("metadata fixture"),
+    });
+  await page.getByText(/세?제목·제작진·게스트 스타일을 읽었습니다/).waitFor();
+  assert.equal(
+    await page.locator("#crew-font").inputValue(),
+    "GangwonEduAll-OTFBold",
+  );
+  rejectPSD = true;
+  await page
+    .locator("#caption-psd")
+    .setInputFiles({
+      name: "broken.psd",
+      mimeType: "image/vnd.adobe.photoshop",
+      buffer: Buffer.from("bad"),
+    });
+  await page.getByText(/PSD를 적용하지 못했습니다/).waitFor();
+  assert.equal(await page.locator("#title-font").inputValue(), "SDCheongRyu");
   await page.locator("#title-font").fill("Inter");
   await page.locator("#title-font").dispatchEvent("change");
   await page.waitForTimeout(300);
@@ -122,6 +179,10 @@ const webURL = process.env.SHORTS_WEB_URL || "http://127.0.0.1:8787";
     "crew",
   );
   assert.equal(await page.locator("#title-font").inputValue(), "Inter");
+  assert.equal(
+    await page.locator("#crew-font").inputValue(),
+    "GangwonEduAll-OTFBold",
+  );
   assert.equal(
     await page.getByLabel("camera-wide.mp4 설명").inputValue(),
     "게스트 클로즈업",

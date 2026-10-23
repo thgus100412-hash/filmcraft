@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Setup helper: pin official model revision, verify authoritative LFS size and SHA-256.
+"""Setup helper: pin publisher model revision, verify authoritative LFS size and SHA-256.
 
-Only public model files are downloaded. Interview data never leave the machine.
+The Unsloth GGUF conversion of the Qwen model is used. Only public model files are downloaded. Interview data never leave the machine.
 Requires network access to huggingface.co and the CDN it redirects to.
 """
 import hashlib
@@ -12,7 +12,7 @@ import re
 import sys
 import urllib.request
 
-REPO = "Qwen/Qwen3-4B-Instruct-2507-GGUF"
+REPO = "unsloth/Qwen3-4B-Instruct-2507-GGUF"
 MODEL = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
 DEFAULT_DEST = (Path.home() / "Library/Application Support/FilmcraftShorts/ai/models") if sys.platform == "darwin" else Path("/workspace/.local-model/models")
 DEST = Path(os.environ.get("FILMCRAFT_MODEL_DIR", str(DEFAULT_DEST)))
@@ -36,7 +36,7 @@ def fetch():
         raise RuntimeError("Invalid upstream model revision")
     candidates = [entry for entry in metadata["siblings"] if entry["rfilename"] == MODEL]
     if len(candidates) != 1:
-        raise RuntimeError("Expected official GGUF artifact not found; review model metadata")
+        raise RuntimeError("Expected publisher GGUF artifact not found; review model metadata")
     lfs = candidates[0]["lfs"]
     expected, size = lfs["sha256"], lfs["size"]
     if not re.fullmatch(r"[0-9a-f]{64}", expected) or not 0 < size < 5_000_000_000:

@@ -6,6 +6,7 @@ const state = {
   files: [],
   step: 1,
   health: null,
+  captionTemplate: null,
   job: null,
   jobs: [],
   polling: false,
@@ -65,6 +66,8 @@ function saveDraft() {
         speech: $("#speech-model").value,
         captionDesign: $("#caption-design").value,
         titleFont: $("#title-font").value,
+        crewFont: $("#crew-font").value,
+        captionTemplate: state.captionTemplate,
         dialogueFont: $("#dialogue-font").value,
       }),
     );
@@ -113,6 +116,13 @@ function restoreDraft() {
         $("#title-font").value = d.titleFont.slice(0, 256);
       if (typeof d.dialogueFont === "string")
         $("#dialogue-font").value = d.dialogueFont.slice(0, 256);
+      if (typeof d.crewFont === "string")
+        $("#crew-font").value = d.crewFont.slice(0, 256);
+      if (d.captionTemplate && typeof d.captionTemplate === "object") {
+        state.captionTemplate = d.captionTemplate;
+        $("#psd-status").textContent =
+          "저장된 PSD 스타일을 적용합니다. 원본 PSD 파일은 서버에 보관하지 않습니다.";
+      }
       $("#brief").value = String(d.brief || "").slice(0, 4000);
       if (["30", "45", "60", "90", "180"].includes(d.duration))
         $("#duration").value = d.duration;
@@ -515,8 +525,26 @@ async function startJob() {
       body: JSON.stringify({
         brief,
         caption_design: $("#caption-design").value,
+        caption_template: state.captionTemplate
+          ? {
+              ...state.captionTemplate,
+              title: {
+                ...state.captionTemplate.title,
+                font: $("#title-font").value.trim(),
+              },
+              guest: {
+                ...state.captionTemplate.guest,
+                font: $("#dialogue-font").value.trim(),
+              },
+              crew: {
+                ...state.captionTemplate.crew,
+                font: $("#crew-font").value.trim(),
+              },
+            }
+          : null,
         title_font: $("#title-font").value.trim(),
         dialogue_font: $("#dialogue-font").value.trim(),
+        crew_font: $("#crew-font").value.trim(),
         max_seconds: Number($("#duration").value),
         speech_model: $("#speech-model").value,
         groups,
@@ -890,9 +918,11 @@ function updateFontNotice() {
     ...fontCatalog.fonts.map((f) => f.family),
     ...Object.keys(fontCatalog.aliases || {}),
   ].map((n) => n.toLowerCase());
-  const missing = [$("#title-font").value, $("#dialogue-font").value].filter(
-    (f) => !names.includes(f.toLowerCase()),
-  );
+  const missing = [
+    $("#title-font").value,
+    $("#dialogue-font").value,
+    $("#crew-font").value,
+  ].filter((f) => !names.includes(f.toLowerCase()));
   $("#font-notice").textContent = missing.length
     ? `활성 목록에서 찾지 못한 글꼴: ${missing.join(", ")}. 산돌구름에서 활성화하고 목록을 새로고침한 뒤 실제 이름을 선택하세요.`
     : "선택한 글꼴을 찾았습니다. 한국어 출력 검사로 자막 사용 가능 여부를 확인하세요.";
@@ -907,6 +937,7 @@ $("#check-fonts").addEventListener("click", async () => {
     for (const name of new Set([
       $("#title-font").value.trim(),
       $("#dialogue-font").value.trim(),
+      $("#crew-font").value.trim(),
     ])) {
       const result = await api("/api/fonts/check", {
         method: "POST",
@@ -927,8 +958,47 @@ $("#check-fonts").addEventListener("click", async () => {
   }
 });
 refreshFonts();
-for (const id of ["caption-design", "title-font", "dialogue-font"])
+for (const id of ["caption-design", "title-font", "dialogue-font", "crew-font"])
   $("#" + id).addEventListener("change", () => {
     saveDraft();
     updateFontNotice();
   });
+
+$("#caption-psd").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (file.size > 128 * 1024 * 1024) {
+    $("#psd-status").textContent = "PSD는 128MB 이하로 올려주세요.";
+    return;
+  }
+  event.target.disabled = true;
+  $("#psd-status").textContent = "PSD 텍스트 레이어를 확인하고 있습니다…";
+  try {
+    const result = await api("/api/caption-template", {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: file,
+    });
+    state.captionTemplate = result.template;
+    $("#title-font").value = result.template.title.font;
+    $("#dialogue-font").value = result.template.guest.font;
+    $("#crew-font").value = result.template.crew.font;
+    $("#caption-design").value = "sotam";
+    $("#psd-status").textContent =
+      `${file.name}: 제목·제작진·게스트 스타일을 읽었습니다. ${result.notice}`;
+    saveDraft();
+    updateFontNotice();
+  } catch (error) {
+    $("#psd-status").textContent =
+      `PSD를 적용하지 못했습니다. ${error.message} 기존 스타일을 유지합니다.`;
+  } finally {
+    event.target.disabled = false;
+    event.target.value = "";
+  }
+});
+$("#clear-psd").addEventListener("click", () => {
+  state.captionTemplate = null;
+  saveDraft();
+  $("#psd-status").textContent =
+    "PSD 적용을 해제했습니다. 선택한 자막 프리셋을 사용합니다.";
+});

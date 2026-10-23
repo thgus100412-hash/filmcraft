@@ -35,7 +35,7 @@ echo '2/3: 맥용 로컬 AI 실행기를 만듭니다. 처음에는 시간이 �
 "$cmake_bin" -S "$source_dir" -B "$source_dir/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 -DGGML_METAL=OFF -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON
 "$cmake_bin" --build "$source_dir/build" --target llama-server --config Release -j 4
 "$source_dir/build/bin/llama-server" --version
-echo '3/3: 발언 선택용 모델을 내려받고 공식 SHA-256으로 검사합니다.'
+echo '3/3: 발언 선택용 모델을 내려받고 배포처 SHA-256으로 검사합니다.'
 FILMCRAFT_MODEL_DIR="$ai_root/models" python3 "$script_dir/fetch-local-model.py"
 echo '준비 완료. 다음 명령을 실행하고 터미널을 켜 두세요:'
 echo 'bash apps/filmcraft-shorts/scripts/start-local-model.sh'

@@ -74,6 +74,15 @@ for name in ('short.mp4','captions.srt','short.fcproj'):(out/name).write_bytes(b
         }
         std::thread::sleep(Duration::from_millis(30));
     }
+    let invalid_psd = agent().post(format!("{base}/api/caption-template")).send(&b"not a psd"[..]).unwrap();
+    assert_eq!(invalid_psd.status().as_u16(), 422);
+    if let Ok(path) = std::env::var("FILMCRAFT_TEST_PSD") {
+        let data = std::fs::read(path).unwrap();
+        let mut response = agent().post(format!("{base}/api/caption-template")).send(&data[..]).unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        let parsed: Value = response.body_mut().read_json().unwrap();
+        assert_eq!(parsed["template"]["title"]["color"], "#3ef9ff");
+    }
     let (_, fonts) = get(&format!("{base}/api/fonts"));
     assert_eq!(fonts["fonts"][0]["family"], "Test Active");
     assert_eq!(post(&format!("{base}/api/fonts/check"), json!({"font":""})).0, 400);
@@ -93,7 +102,13 @@ for name in ('short.mp4','captions.srt','short.fcproj'):(out/name).write_bytes(b
     let mut uploaded = agent().post(format!("{base}/api/files")).header("X-File-Name", "interview.mp4").send(&b"fixture-media"[..]).unwrap();
     assert_eq!(uploaded.status().as_u16(), 201);
     let file: Value = uploaded.body_mut().read_json().unwrap();
-    let input = json!({"caption_design":"sotam","title_font":"Inter","dialogue_font":"Inter","brief":"다시 시작한 경험","max_seconds":45,"speech_model":"whisper-small","groups":[{"name":"테이크 1","sync":"audio","cameras":[{"file_id":file["id"],"label":"게스트","caption_role":"crew"}],"recordings":[]}]});
+    let mut input = json!({"caption_design":"sotam","title_font":"Inter","dialogue_font":"Inter","brief":"다시 시작한 경험","max_seconds":45,"speech_model":"whisper-small","groups":[{"name":"테이크 1","sync":"audio","cameras":[{"file_id":file["id"],"label":"게스트","caption_role":"crew"}],"recordings":[]}]});
+    let style = json!({"font":"Inter","size":54.0,"color":"#3ef9ff","margin":0.1,"outline":2.0,"outline_color":"#000000","line_spacing":1.2});
+    input["caption_template"] = json!({"title":style,"guest":style,"crew":style});
+    input["crew_font"] = json!("Inter");
+    let mut invalid_style = input.clone();
+    invalid_style["caption_template"]["title"]["size"] = json!(99999);
+    assert_eq!(post(&format!("{base}/api/jobs"), invalid_style).0, 400);
     let (_, health) = get(&format!("{base}/api/health"));
     assert!(health["platform"].is_string());
     assert!(health["fonts"].as_array().unwrap().iter().any(|f| f["family"] == "Inter"));
@@ -105,6 +120,8 @@ for name in ('short.mp4','captions.srt','short.fcproj'):(out/name).write_bytes(b
     let id = job["id"].as_str().unwrap();
     let manifest: Value = serde_json::from_slice(&std::fs::read(running.root.join("data/jobs").join(id).join("job.json")).unwrap()).unwrap();
     assert_eq!(manifest["caption_design"], "sotam");
+    assert_eq!(manifest["caption_template"], input["caption_template"]);
+    assert_eq!(manifest["crew_font"], "Inter");
     assert_eq!(manifest["groups"][0]["cameras"][0]["caption_role"], "crew");
     let (code, _) = post(&format!("{base}/api/jobs"), input.clone());
     assert_eq!(code, 409);

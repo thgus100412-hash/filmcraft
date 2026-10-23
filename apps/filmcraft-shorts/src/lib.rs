@@ -2,6 +2,8 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 pub mod active_fonts;
+mod dialogue;
+pub mod psd_style;
 
 use filmcraft_engine::Session;
 use filmcraft_project::{ItemId, Transcript};
@@ -16,6 +18,10 @@ const LIMIT: usize = 16 * 1024 * 1024;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Job {
+    #[serde(default)]
+    pub caption_template: Option<psd_style::Template>,
+    #[serde(default)]
+    pub crew_font: Option<String>,
     #[serde(default)]
     pub caption_design: CaptionDesign,
     #[serde(default = "title_font")]
@@ -143,7 +149,10 @@ pub fn execute(s: &mut Session, command: &str, params: Value) -> Result<Value> {
 
 pub fn validate_job(job: &Job) -> Result<()> {
     validate_planner(&job.planner)?;
-    if [&job.title_font, &job.dialogue_font].iter().any(|f| f.trim().is_empty() || f.len() > 256) {
+    if let Some(t) = &job.caption_template {
+        t.validate()?;
+    }
+    if [&job.title_font, &job.dialogue_font].into_iter().chain(job.crew_font.as_ref()).any(|f| f.trim().is_empty() || f.len() > 256) {
         return Err("font names must contain 1–256 bytes".into());
     }
     if job.brief.trim().is_empty() || job.brief.len() > 16_000 {
@@ -356,17 +365,12 @@ pub fn validate_plan(job: &Job, groups: &[Vec<Media>], plan: &Plan) -> Result<Ve
 pub fn assemble(prepared: &mut Prepared, job: &Job, plan: &Plan) -> Result<()> {
     let cuts = validate_plan(job, &prepared.groups, plan)?;
     let active = active_fonts::catalog()?;
-    let requested_title = if active.native_registry && job.caption_design == CaptionDesign::Sotam {
-        active_fonts::resolve_requested(&job.title_font, &active)?
-    } else {
-        job.title_font.clone()
-    };
-    let requested_dialogue = if active.native_registry && job.caption_design == CaptionDesign::Sotam {
-        active_fonts::resolve_requested(&job.dialogue_font, &active)?
-    } else {
-        job.dialogue_font.clone()
-    };
-    let (title_face, dialogue_face) = if job.caption_design == CaptionDesign::Sotam {
+    let title_requested = job.caption_template.as_ref().map_or(job.title_font.as_str(), |t| t.title.font.as_str());
+    let dialogue_requested = job.caption_template.as_ref().map_or(job.dialogue_font.as_str(), |t| t.guest.font.as_str());
+    let requested_title = if active.native_registry { active_fonts::resolve_requested(title_requested, &active)? } else { title_requested.to_string() };
+    let requested_dialogue =
+        if active.native_registry { active_fonts::resolve_requested(dialogue_requested, &active)? } else { dialogue_requested.to_string() };
+    let (title_face, dialogue_face) = {
         let dialogue = plan
             .segments
             .iter()
@@ -383,8 +387,6 @@ pub fn assemble(prepared: &mut Prepared, job: &Job, plan: &Plan) -> Result<()> {
                 Ok(text)
             })?;
         (caption_font(&requested_title, &plan.title)?, caption_font(&requested_dialogue, &dialogue)?)
-    } else {
-        (job.title_font.clone(), job.dialogue_font.clone())
     };
     let s = &mut prepared.session;
     execute(s, "file.newSequence", json!({"name":plan.title,"width":1080,"height":1920,"fps":30,"video":2,"audio":1}))?;
@@ -395,24 +397,29 @@ pub fn assemble(prepared: &mut Prepared, job: &Job, plan: &Plan) -> Result<()> {
         let role = group.cameras.iter().chain(&group.recordings).nth(segment.audio).ok_or("unknown caption source")?.caption_role;
         let words = &prepared.groups.get(segment.group).and_then(|g| g.get(segment.audio)).ok_or("missing caption transcript")?.transcript.words;
         let selected = words.get(segment.first_word..=segment.last_word).ok_or("missing caption words")?;
-        let mut text = String::new();
-        let mut begin = 0;
-        let mut end = 0;
-        for word in selected {
-            let start = at.checked_add(word.start.0 - cut.audio_in).ok_or("caption time overflow")?;
-            let stop = at.checked_add(word.end.0 - cut.audio_in).ok_or("caption time overflow")?;
-            if !text.is_empty() && (text.chars().count() + word.text.chars().count() > 20 || stop - begin > 3 * TICKS_PER_SECOND) {
-                dialogue.push((role, begin, end, std::mem::take(&mut text)));
+        let offset = at.checked_sub(cut.audio_in).ok_or("caption time overflow")?;
+        let custom = job.caption_template.as_ref().map(|t| if role == CaptionRole::Guest { &t.guest } else { &t.crew });
+        let requested = custom
+            .map(|t| t.font.as_str())
+            .unwrap_or_else(|| if role == CaptionRole::Crew { job.crew_font.as_deref().unwrap_or(&requested_dialogue) } else { &requested_dialogue });
+        let family = if active.native_registry { active_fonts::resolve_requested(requested, &active)? } else { requested.into() };
+        let text = selected.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+        let font = caption_font(&family, &text)?;
+        let style = filmcraft_text::TextStyle {
+            family: font,
+            style: "SemiBold".into(),
+            size: custom.map_or(51.75, |t| t.size as f32) * 1920.0 / 1080.0,
+            ..Default::default()
+        };
+        let widest = text.chars().map(|c| filmcraft_text::measure(&c.to_string(), &style)).fold(1.0f32, f32::max);
+        let max_chars = (900.0 / widest).floor().clamp(1.0, 16.0) as usize;
+        for (begin, end, text) in dialogue::cues(selected, offset, max_chars)? {
+            let rate = filmcraft_time::FrameRate::FPS_30;
+            let begin = rate.snap_nearest(filmcraft_time::Tick(begin)).0;
+            let end = rate.snap_nearest(filmcraft_time::Tick(end)).0;
+            if end <= begin {
+                return Err("자막 구간이 한 프레임보다 짧습니다. 인식 대본의 단어 시간을 확인해 주세요.".into());
             }
-            if text.is_empty() {
-                begin = start;
-            } else {
-                text.push(' ');
-            }
-            text.push_str(word.text.trim());
-            end = stop;
-        }
-        if !text.is_empty() {
             dialogue.push((role, begin, end, text));
         }
         let placed = execute(
@@ -420,7 +427,7 @@ pub fn assemble(prepared: &mut Prepared, job: &Job, plan: &Plan) -> Result<()> {
             "timeline.place",
             json!({"item":cut.video,"time":at,"sourceIn":cut.video_in,"duration":cut.duration,"track":"V1","video":true,"audio":false}),
         )?;
-        execute(s, "clip.fitToFrame", json!({"clips":placed["clips"]}))?;
+        execute(s, "clip.fillFrame", json!({"clips":placed["clips"]}))?;
         execute(
             s,
             "timeline.place",
@@ -429,19 +436,25 @@ pub fn assemble(prepared: &mut Prepared, job: &Job, plan: &Plan) -> Result<()> {
         at = at.checked_add(cut.duration).ok_or("timeline overflow")?;
     }
     let title = execute(s, "captions.newTrack", json!({"name":"Title","language":"ko"}))?["track"].clone();
-    let sotam = job.caption_design == CaptionDesign::Sotam;
+    let sotam = job.caption_design == CaptionDesign::Sotam || job.caption_template.is_some();
     let title_text = if sotam { two_line_title(&plan.title) } else { plan.title.clone() };
-    let title_style = filmcraft_text::TextStyle { family: title_face.clone(), style: "SemiBold".into(), size: 120.0, ..Default::default() };
+    let base_title_size = job.caption_template.as_ref().map_or(67.5, |t| t.title.size as f32);
+    let title_style =
+        filmcraft_text::TextStyle { family: title_face.clone(), style: "SemiBold".into(), size: base_title_size * 1920.0 / 1080.0, ..Default::default() };
     let title_width = title_text.lines().map(|line| filmcraft_text::measure(line, &title_style)).fold(1.0f32, f32::max);
-    let title_size = 67.5 * (970.0 / title_width).min(1.0);
+    let title_size = base_title_size * (970.0 / title_width).min(1.0);
     execute(
         s,
         "captions.add",
         json!({"track":title,"text":title_text,"time":0,"durationSeconds":if sotam { at as f64 / TICKS_PER_SECOND as f64 } else { (at as f64 / TICKS_PER_SECOND as f64).min(3.0) }}),
     )?;
-    let mut style = json!({"track":title,"font":"Noto Sans CJK KR","size":72,"outline":3,"anchor":"top","margin":0.10});
+    let mut style = json!({"track":title,"font":title_face,"size":72,"outline":3,"anchor":"top","margin":0.10});
     if sotam {
         style = json!({"track":title,"font":title_face,"size":title_size,"outline":2.8125,"outlineColor":"#22232b","color":"#3ef9ff","background":false,"anchor":"top","margin":0.060,"lineSpacing":1.175});
+    }
+    if let Some(template) = &job.caption_template {
+        let t = &template.title;
+        style = json!({"track":title,"font":title_face,"size":f64::from(title_size),"outline":t.outline,"outlineColor":t.outline_color,"color":t.color,"background":false,"anchor":"top","margin":t.margin,"lineSpacing":t.line_spacing});
     }
     execute(s, "captions.setStyle", style)?;
     // Keep an unstyled, disabled combined track for an SRT containing every speaker.
@@ -450,29 +463,38 @@ pub fn assemble(prepared: &mut Prepared, job: &Job, plan: &Plan) -> Result<()> {
         let mut tracks = Vec::new();
         for (name, role, color) in [("말자막 게스트", CaptionRole::Guest, "#fffc00"), ("말자막 제작진", CaptionRole::Crew, "#3ef9ff")] {
             let track = execute(s, "captions.newTrack", json!({"name":name,"language":"ko"}))?["track"].clone();
-            execute(
-                s,
-                "captions.setStyle",
-                json!({"track":track,"font":dialogue_face,"size":51.75,"outline":1.6875,"outlineColor":"#000000","color":color,"background":false,"anchor":"bottom","margin":0.30,"lineSpacing":1.2}),
-            )?;
+            let requested = if role == CaptionRole::Crew { job.crew_font.as_deref().unwrap_or(&requested_dialogue) } else { &requested_dialogue };
+            let family = if active.native_registry { active_fonts::resolve_requested(requested, &active)? } else { requested.into() };
+            let all = dialogue.iter().filter(|(r, _, _, _)| *r == role).map(|(_, _, _, t)| t.as_str()).collect::<Vec<_>>().join(" ");
+            let role_font = caption_font(&family, &all)?;
+            let mut track_style = json!({"track":track,"font":role_font,"size":51.75,"outline":1.6875,"outlineColor":"#000000","color":color,"background":false,"anchor":"bottom","margin":0.30,"lineSpacing":1.2});
+            if let Some(template) = &job.caption_template {
+                let t = if role == CaptionRole::Guest { &template.guest } else { &template.crew };
+                let family = if active.native_registry { active_fonts::resolve_requested(&t.font, &active)? } else { t.font.clone() };
+                let all = dialogue.iter().filter(|(r, _, _, _)| *r == role).map(|(_, _, _, t)| t.as_str()).collect::<Vec<_>>().join(" ");
+                let font = caption_font(&family, &all)?;
+                track_style = json!({"track":track,"font":font,"size":t.size,"outline":t.outline,"outlineColor":t.outline_color,"color":t.color,"background":false,"anchor":"bottom","margin":t.margin,"lineSpacing":t.line_spacing});
+            }
+            execute(s, "captions.setStyle", track_style)?;
             tracks.push((role, track));
         }
         tracks
     } else {
         Vec::new()
     };
-    let captions =
-        execute(s, "transcript.createCaptions", json!({"name":"Interview","maxChars":20,"lines":2,"minSeconds":0.4,"maxSeconds":3}))?["track"].clone();
-    execute(s, "captions.setTrack", json!({"track":captions,"language":"ko","enabled":!sotam}))?;
-    if sotam {
-        for (role, begin, end, text) in dialogue {
-            let track = &role_tracks.iter().find(|(r, _)| *r == role).ok_or("missing speaker track")?.1;
+    let captions = execute(s, "captions.newTrack", json!({"name":"Interview","language":"ko"}))?["track"].clone();
+    execute(s, "captions.setTrack", json!({"track":captions,"enabled":!sotam}))?;
+    execute(s, "captions.setStyle", json!({"track":captions,"font":dialogue_face,"size":51.75,"outline":2,"anchor":"bottom","margin":0.16}))?;
+    for (role, begin, end, text) in dialogue {
+        let mut tracks = vec![captions.clone()];
+        if sotam {
+            tracks.push(role_tracks.iter().find(|(r, _)| *r == role).ok_or("missing speaker track")?.1.clone());
+        }
+        for track in tracks {
             let added =
-                execute(s, "captions.add", json!({"track":track,"text":text,"time":begin,"durationSeconds":(end - begin) as f64 / TICKS_PER_SECOND as f64}))?;
+                execute(s, "captions.add", json!({"track":track,"text":text,"time":begin,"durationSeconds":(end-begin) as f64/TICKS_PER_SECOND as f64}))?;
             execute(s, "captions.setTimes", json!({"caption":added["caption"],"startTime":begin,"endTime":end}))?;
         }
-    } else {
-        execute(s, "captions.setStyle", json!({"track":captions,"font":"Noto Sans CJK KR","size":64,"outline":3,"anchor":"bottom","margin":0.13}))?;
     }
     Ok(())
 }
@@ -611,18 +633,25 @@ mod tests {
         let audio = q.audio_tracks[0].items[0].item.0;
         let mut a = media(audio, 0);
         a.video = false;
+        a.transcript.words[0].text = "I failed.".into();
+        a.transcript.words[1].text = "I tried again.".into();
         execute(&mut s, "transcript.set", json!({"item":audio,"transcript":a.transcript})).unwrap();
         let mut prepared = Prepared { session: s, groups: vec![vec![media(video, 0), media(video, 0), a]], analysis: json!({}) };
-        assemble(&mut prepared, &job(), &plan()).unwrap();
+        let mut j = job();
+        j.title_font = "Inter".into();
+        j.dialogue_font = "Inter".into();
+        let mut p = plan();
+        p.title = "Starting again".into();
+        assemble(&mut prepared, &j, &p).unwrap();
         let q = prepared.session.active_sequence().unwrap();
         assert_eq!((q.settings.width, q.settings.height), (1080, 1920));
         let heard: Vec<_> = q.audio_tracks.iter().flat_map(|t| t.items.iter()).collect();
         assert_eq!(heard.len(), 1);
         assert_eq!(heard[0].item.0, audio);
         let captions = execute(&mut prepared.session, "captions.list", json!({"track":"C1"})).unwrap();
-        assert!(captions.to_string().contains("실패했지만"), "{captions}");
+        assert!(captions.to_string().contains("I failed."), "{captions}");
         let words = execute(&mut prepared.session, "transcript.inspect", json!({})).unwrap();
         assert_eq!(words["words"][0]["start"], json!(0));
-        assert_eq!(words["words"][1]["text"], json!("다시 시작했어요."));
+        assert_eq!(words["words"][1]["text"], json!("I tried again."));
     }
 }

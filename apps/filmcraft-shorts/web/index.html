@@ -183,22 +183,54 @@
                         value="SDCheongRyu"
                         maxlength="256" /></label
                     ><label class="option-box"
-                      >말자막 글꼴<input
+                      >게스트 말자막 글꼴<input
                         id="dialogue-font"
                         list="installed-fonts"
                         value="GangwonEduAll-OTFBold"
                         maxlength="256"
                     /></label>
                   </div>
+                  <label class="option-box"
+                    >제작진 말자막 글꼴<input
+                      id="crew-font"
+                      list="installed-fonts"
+                      value="GangwonEduAll-OTFBold"
+                      maxlength="256"
+                  /></label>
+                  <label class="option-box"
+                    >자막 PSD 불러오기<input
+                      type="file"
+                      id="caption-psd"
+                      accept=".psd"
+                  /></label>
+                  <p id="psd-status" class="muted" role="status">
+                    제목·제작진·게스트 텍스트 레이어가 분리된 9:16 PSD를
+                    올려주세요.
+                  </p>
+                  <button type="button" id="clear-psd" class="button secondary">
+                    PSD 적용 해제
+                  </button>
+                  <p class="muted">
+                    영상은 중앙 기준으로 확대·크롭해 9:16 화면을 채웁니다.
+                    말자막은 발언 시간에 맞춰 짧게 나눕니다.
+                  </p>
                   <datalist id="installed-fonts"></datalist>
                   <p class="muted">
                     산돌구름 앱에서 원하는 글꼴을 활성화한 뒤 목록을
                     새로고침하세요. 서버를 다시 시작할 필요는 없습니다.
                   </p>
-                  <button type="button" id="refresh-fonts" class="button secondary">
+                  <button
+                    type="button"
+                    id="refresh-fonts"
+                    class="button secondary"
+                  >
                     글꼴 목록 새로고침
                   </button>
-                  <button type="button" id="check-fonts" class="button secondary">
+                  <button
+                    type="button"
+                    id="check-fonts"
+                    class="button secondary"
+                  >
                     한국어 출력 검사
                   </button>
                   <p id="font-status" class="muted" role="status"></p>
