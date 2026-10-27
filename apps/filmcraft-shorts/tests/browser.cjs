@@ -142,26 +142,22 @@ const webURL = process.env.SHORTS_WEB_URL || "http://127.0.0.1:8787";
           },
     ),
   );
-  await page
-    .locator("#caption-psd")
-    .setInputFiles({
-      name: "captions.psd",
-      mimeType: "image/vnd.adobe.photoshop",
-      buffer: Buffer.from("metadata fixture"),
-    });
+  await page.locator("#caption-psd").setInputFiles({
+    name: "captions.psd",
+    mimeType: "image/vnd.adobe.photoshop",
+    buffer: Buffer.from("metadata fixture"),
+  });
   await page.getByText(/세?제목·제작진·게스트 스타일을 읽었습니다/).waitFor();
   assert.equal(
     await page.locator("#crew-font").inputValue(),
     "GangwonEduAll-OTFBold",
   );
   rejectPSD = true;
-  await page
-    .locator("#caption-psd")
-    .setInputFiles({
-      name: "broken.psd",
-      mimeType: "image/vnd.adobe.photoshop",
-      buffer: Buffer.from("bad"),
-    });
+  await page.locator("#caption-psd").setInputFiles({
+    name: "broken.psd",
+    mimeType: "image/vnd.adobe.photoshop",
+    buffer: Buffer.from("bad"),
+  });
   await page.getByText(/PSD를 적용하지 못했습니다/).waitFor();
   assert.equal(await page.locator("#title-font").inputValue(), "SDCheongRyu");
   await page.locator("#title-font").fill("Inter");
@@ -204,6 +200,15 @@ const webURL = process.env.SHORTS_WEB_URL || "http://127.0.0.1:8787";
           json: {
             jobs: [
               {
+                id: "bad-123",
+                created: Date.now(),
+                status: "failed",
+                stage: "planning",
+                can_retry: true,
+                brief: "재시도 검사",
+                error: "로컬 AI 응답 대기 시간을 초과했습니다.",
+              },
+              {
                 id: "abc-123",
                 created: Date.now(),
                 status: "done",
@@ -223,6 +228,59 @@ const webURL = process.env.SHORTS_WEB_URL || "http://127.0.0.1:8787";
         })
       : route.continue(),
   );
+  await page.getByRole("button", { name: "작업 기록", exact: false }).click();
+  let retryFinished = false;
+  let retryCalls = 0;
+  const retried = {
+    id: "def-456",
+    brief: "재시도 검사",
+    created: Date.now(),
+    status: "running",
+    stage: "planning",
+    planning_status: "로컬 AI가 발언을 고르고 있습니다. 최대 대기 120분.",
+    can_retry: false,
+  };
+  await page.route("**/api/jobs/bad-123/retry", (route) => {
+    retryCalls++;
+    assert.equal(route.request().method(), "POST");
+    return route.fulfill({ json: retried });
+  });
+  await page.route("**/api/jobs/def-456", (route) =>
+    route.fulfill({
+      json: retryFinished
+        ? { ...retried, status: "done", title: "재시도 완료", segments: [] }
+        : retried,
+    }),
+  );
+  await page.getByRole("button", { name: "상태 확인", exact: true }).click();
+  await page
+    .getByRole("button", { name: "분석 재사용하고 다시 시도" })
+    .waitFor();
+  assert.match(
+    await page.locator("#progress-description").textContent(),
+    /중단/,
+  );
+  await page.screenshot({
+    path: "/tmp/shorts-planner-retry.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: "/tmp/shorts-planner-retry-mobile.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  await page.getByRole("button", { name: "분석 재사용하고 다시 시도" }).click();
+  await page.waitForFunction(() =>
+    document
+      .querySelector("#progress-description")
+      .textContent.includes("120분"),
+  );
+  assert.equal(retryCalls, 1);
+  retryFinished = true;
+  await page
+    .getByRole("heading", { name: "재시도 완료", exact: true })
+    .waitFor();
   await page.getByRole("button", { name: "작업 기록", exact: false }).click();
   await page.getByRole("button", { name: "결과 열기" }).click();
   assert.equal(

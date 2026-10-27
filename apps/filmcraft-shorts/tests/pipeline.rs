@@ -141,6 +141,70 @@ fn actual_multicam_sync_external_mic_and_burned_caption_export() {
     assert!(cli.status.success(), "CLI: {}", String::from_utf8_lossy(&cli.stderr));
     assert!(dir.join("cli-output/short.mp4").is_file());
     assert!(std::fs::read_to_string(dir.join("cli-output/captions.srt")).unwrap().contains("I failed."));
+    std::fs::rename(dir.join("cli-output/input-job.json"), dir.join("cli-output/input-job.json.saved")).unwrap();
+    let legacy = filmcraft_shorts::resume::restore(&job, &dir.join("job.json"), &dir.join("cli-output")).unwrap();
+    assert_eq!(legacy.groups[0][2].start, prepared.groups[0][2].start);
+    std::fs::rename(dir.join("cli-output/input-job.json.saved"), dir.join("cli-output/input-job.json")).unwrap();
+    // A retry must use the saved transcript/project, not rerun import/ASR/sync.
+    for name in ["a", "b", "guest", "host"] {
+        std::fs::rename(dir.join(format!("{name}.json")), dir.join(format!("{name}.json.saved"))).unwrap();
+    }
+    let retry = Command::new(env!("CARGO_BIN_EXE_filmcraft-shorts"))
+        .arg(dir.join("job.json"))
+        .arg(dir.join("resumed-output"))
+        .arg("--resume")
+        .arg(dir.join("cli-output"))
+        .arg("--plan")
+        .arg(dir.join("plan.json"))
+        .arg("--render")
+        .output()
+        .unwrap();
+    assert!(retry.status.success(), "resume: {}", String::from_utf8_lossy(&retry.stderr));
+    assert!(String::from_utf8_lossy(&retry.stderr).contains("재사용"));
+    assert_eq!(std::fs::read(dir.join("cli-output/captions.srt")).unwrap(), std::fs::read(dir.join("resumed-output/captions.srt")).unwrap());
+    for name in ["a", "b", "guest", "host"] {
+        std::fs::rename(dir.join(format!("{name}.json.saved")), dir.join(format!("{name}.json"))).unwrap();
+    }
+    let analysis_path = dir.join("cli-output/analysis.json");
+    let original_analysis = std::fs::read(&analysis_path).unwrap();
+    let mut damaged: serde_json::Value = serde_json::from_slice(&original_analysis).unwrap();
+    damaged["groups"][0]["sources"][0]["words"][0]["id"] = json!(9999);
+    std::fs::write(&analysis_path, serde_json::to_vec(&damaged).unwrap()).unwrap();
+    assert!(filmcraft_shorts::resume::restore(&job, &dir.join("job.json"), &dir.join("cli-output")).is_err());
+    std::fs::write(&analysis_path, original_analysis).unwrap();
+    let original_job = std::fs::read(dir.join("job.json")).unwrap();
+    let mut changed = job_value.clone();
+    changed["brief"] = json!("changed brief");
+    std::fs::write(dir.join("job.json"), serde_json::to_vec(&changed).unwrap()).unwrap();
+    let changed = Command::new(env!("CARGO_BIN_EXE_filmcraft-shorts"))
+        .arg(dir.join("job.json"))
+        .arg(dir.join("changed-job-output"))
+        .arg("--resume")
+        .arg(dir.join("cli-output"))
+        .arg("--plan")
+        .arg(dir.join("plan.json"))
+        .output()
+        .unwrap();
+    assert!(!changed.status.success());
+    assert!(String::from_utf8_lossy(&changed.stderr).contains("설정이 달라"));
+    std::fs::write(dir.join("job.json"), original_job).unwrap();
+    use std::io::Write;
+    let mut source = std::fs::OpenOptions::new().append(true).open(dir.join("a.mov")).unwrap();
+    let original_size = source.metadata().unwrap().len();
+    source.write_all(b"x").unwrap();
+    drop(source);
+    let changed = Command::new(env!("CARGO_BIN_EXE_filmcraft-shorts"))
+        .arg(dir.join("job.json"))
+        .arg(dir.join("changed-source-output"))
+        .arg("--resume")
+        .arg(dir.join("cli-output"))
+        .arg("--plan")
+        .arg(dir.join("plan.json"))
+        .output()
+        .unwrap();
+    assert!(!changed.status.success());
+    assert!(String::from_utf8_lossy(&changed.stderr).contains("원본 파일이 변경"));
+    std::fs::OpenOptions::new().write(true).open(dir.join("a.mov")).unwrap().set_len(original_size).unwrap();
     if let Ok(path) = std::env::var("FILMCRAFT_TEST_PSD") {
         let mut template = filmcraft_shorts::psd_style::parse(&std::fs::read(path).unwrap()).unwrap();
         let korean = "Noto Sans CJK KR";

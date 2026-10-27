@@ -163,7 +163,10 @@ fn record_json(app: &App, r: &Record) -> Value {
     let log = tail(&root.join("worker.log"));
     let stage = log.lines().filter_map(|l| l.strip_prefix("[shorts-stage] ")).next_back().unwrap_or("analysis");
     let plan: Value = std::fs::read(root.join("output/plan.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
-    json!({"id":r.id,"brief":r.brief,"created":r.created,"status":r.status,"stage":stage,"error":r.error,"title":plan["title"],"segments":plan["segments"]})
+    let can_retry = ["failed", "cancelled", "interrupted"].contains(&r.status.as_str())
+        && ["sources.fcproj", "analysis.json"].iter().all(|n| root.join("output").join(n).is_file());
+    let planning_status = log.lines().filter_map(|l| l.strip_prefix("[shorts-planner] ")).next_back();
+    json!({"can_retry":can_retry,"planning_status":planning_status,"id":r.id,"brief":r.brief,"created":r.created,"status":r.status,"stage":stage,"error":r.error,"title":plan["title"],"segments":plan["segments"]})
 }
 fn health() -> Value {
     let agent: ureq::Agent = ureq::Agent::config_builder().proxy(None).timeout_global(Some(Duration::from_secs(2))).build().into();
@@ -322,6 +325,44 @@ fn start_job(r: &mut Request, app: &App) -> ApiResult {
     save_record(app, &record)?;
     Ok(json_reply(202, record_json(app, &record)))
 }
+fn retry_job(app: &App, id: &str) -> ApiResult {
+    let mut active = app.active.lock().map_err(err)?;
+    if active.is_some() {
+        return Err((409, "진행 중인 편집이 끝난 뒤 다시 시도하세요.".into()));
+    }
+    let previous = app.records.lock().map_err(err)?.get(id).cloned().ok_or((404, "작업을 찾을 수 없습니다.".into()))?;
+    if !["failed", "cancelled", "interrupted"].contains(&previous.status.as_str()) {
+        return Err((409, "중단된 작업만 다시 시도할 수 있습니다.".into()));
+    }
+    let previous_root = app.root.join("jobs").join(id);
+    let cache = previous_root.join("output");
+    if !["sources.fcproj", "analysis.json"].iter().all(|n| cache.join(n).is_file()) {
+        return Err((409, "완료된 분석이 없습니다. 새 편집을 시작하세요.".into()));
+    }
+    let manifest: Value = filmcraft_shorts::read_json(&previous_root.join("job.json")).map_err(err)?;
+    let typed: filmcraft_shorts::Job = serde_json::from_value(manifest.clone()).map_err(err)?;
+    filmcraft_shorts::validate_job(&typed).map_err(err)?;
+    let next = new_id();
+    let root = app.root.join("jobs").join(&next);
+    std::fs::create_dir(&root).map_err(err)?;
+    std::fs::write(root.join("job.json"), serde_json::to_vec(&manifest).map_err(err)?).map_err(err)?;
+    let log = File::create(root.join("worker.log")).map_err(err)?;
+    let child = Command::new(&app.worker)
+        .arg(root.join("job.json"))
+        .arg(root.join("output"))
+        .arg("--render")
+        .arg("--resume")
+        .arg(cache)
+        .stdout(Stdio::from(log.try_clone().map_err(err)?))
+        .stderr(Stdio::from(log))
+        .spawn()
+        .map_err(err)?;
+    let record = Record { id: next.clone(), brief: previous.brief, created: now(), status: "running".into(), error: None };
+    app.records.lock().map_err(err)?.insert(next.clone(), record.clone());
+    *active = Some((next, child));
+    save_record(app, &record)?;
+    Ok(json_reply(202, record_json(app, &record)))
+}
 fn artifact(r: &Request, app: &App, id: &str, name: &str) -> ApiResult {
     if !valid_id(id) || !["short.mp4", "captions.srt", "short.fcproj", "plan.json"].contains(&name) {
         return Err((404, "파일을 찾을 수 없습니다.".into()));
@@ -427,6 +468,7 @@ fn route(r: &mut Request, app: &App) -> ApiResult {
                     let record = records.get(*id).ok_or((404, "작업을 찾을 수 없습니다.".into()))?;
                     Ok(json_reply(200, record_json(app, record)))
                 }
+                ("POST", ["api", "jobs", id, "retry"]) if valid_id(id) => retry_job(app, id),
                 ("POST", ["api", "jobs", id, "cancel"]) if valid_id(id) => {
                     let mut active = app.active.lock().map_err(err)?;
                     if let Some((running, child)) = active.as_mut()

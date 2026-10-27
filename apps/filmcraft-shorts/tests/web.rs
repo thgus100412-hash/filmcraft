@@ -149,6 +149,29 @@ for name in ('short.mp4','captions.srt','short.fcproj'):(out/name).write_bytes(b
     assert_eq!(get(&format!("{base}/api/jobs/{id}")).1["status"], "cancelled");
     let (_, history) = get(&format!("{base}/api/jobs"));
     assert_eq!(history["jobs"].as_array().unwrap().len(), 2);
+    assert_eq!(post(&format!("{base}/api/jobs/{id}/retry"), json!({})).0, 409, "no complete analysis yet");
+    let output = running.root.join("data/jobs").join(id).join("output");
+    std::fs::create_dir_all(&output).unwrap();
+    for name in ["sources.fcproj", "analysis.json"] {
+        std::fs::write(output.join(name), b"fake cache, orchestration only").unwrap();
+    }
+    assert_eq!(get(&format!("{base}/api/jobs/{id}")).1["can_retry"], true);
+    let (code, retry) = post(&format!("{base}/api/jobs/{id}/retry"), json!({}));
+    assert_eq!(code, 202);
+    assert_ne!(retry["id"], id);
+    assert_eq!(post(&format!("{base}/api/jobs/{id}/retry"), json!({})).0, 409, "only one active worker");
+    let next = retry["id"].as_str().unwrap();
+    assert_eq!(
+        filmcraft_shorts::read_json::<Value>(&running.root.join("data/jobs").join(id).join("job.json")).unwrap(),
+        filmcraft_shorts::read_json::<Value>(&running.root.join("data/jobs").join(next).join("job.json")).unwrap()
+    );
+    for _ in 0..100 {
+        if get(&format!("{base}/api/jobs/{next}")).1["status"] == "done" {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    assert_eq!(get(&format!("{base}/api/jobs/{next}")).1["status"], "done");
     let mut retained = agent().delete(format!("{base}/api/files/{}", file["id"].as_str().unwrap())).call().unwrap();
     assert_eq!(retained.status().as_u16(), 200);
     assert_eq!(retained.body_mut().read_json::<Value>().unwrap()["retained"], true);

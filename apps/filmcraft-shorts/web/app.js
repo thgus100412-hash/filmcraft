@@ -592,6 +592,15 @@ function renderProgress(job) {
       ]
     : "PROCESSING";
   $("#cancel-job").classList.toggle("hidden", job.status !== "running");
+  $("#retry-job").classList.toggle("hidden", !stopped || !job.can_retry);
+  $("#progress-description").textContent = stopped
+    ? "작업이 중단됐습니다. 완료된 분석이 있으면 다시 사용해 발언 선택부터 재시도할 수 있습니다."
+    : job.stage === "planning"
+      ? (job.planning_status ||
+          "로컬 AI가 대본을 읽고 있습니다. 느린 CPU에서는 수십 분 이상 걸릴 수 있습니다.") +
+        ` 작업 시작 후 ${Math.max(0, Math.floor((Date.now() - Number(job.created)) / 60000))}분 경과.`
+      : "로컬 편집 엔진이 작업하고 있습니다. 브라우저를 새로고침해도 서버가 실행 중이면 편집은 계속됩니다.";
+
   const error = $("#job-error");
   error.classList.toggle("hidden", !stopped);
   error.textContent =
@@ -1001,4 +1010,22 @@ $("#clear-psd").addEventListener("click", () => {
   saveDraft();
   $("#psd-status").textContent =
     "PSD 적용을 해제했습니다. 선택한 자막 프리셋을 사용합니다.";
+});
+
+$("#retry-job").addEventListener("click", async () => {
+  if (!state.job) return;
+  $("#retry-job").disabled = true;
+  try {
+    state.job = await api(`/api/jobs/${state.job.id}/retry`, {
+      method: "POST",
+    });
+    showStep(3);
+    renderProgress(state.job);
+    pollJob();
+    loadHistory();
+  } catch (error) {
+    notify(error.message);
+  } finally {
+    $("#retry-job").disabled = false;
+  }
 });

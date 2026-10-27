@@ -17,17 +17,19 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     if args.is_empty() || args.first().is_some_and(|a| a == "--help") {
-        writeln!(std::io::stdout(), "filmcraft-shorts <job.json> <new-output-directory> [--render]\nfilmcraft-shorts <job.json> <new-output-directory> --plan <plan.json> [--render]\nPaths in job.json are relative to that file. Without --plan, call the configured LLM.\nPlanner must be local (localhost or 127.0.0.1); remote transcript transmission is disabled.\nBuild with --features whisper for automatic Korean transcription.\nOutput directory must not exist; original media are never modified.").map_err(|e| e.to_string())?;
+        writeln!(std::io::stdout(), "filmcraft-shorts <job.json> <new-output-directory> [--render]\nfilmcraft-shorts <job.json> <new-output-directory> --plan <plan.json> [--render]\nPaths in job.json are relative to that file. Without --plan, call the configured LLM. --resume <old-output-directory> reuses verified analysis.\nPlanner must be local (localhost or 127.0.0.1); remote transcript transmission is disabled.\nBuild with --features whisper for automatic Korean transcription.\nOutput directory must not exist; original media are never modified.").map_err(|e| e.to_string())?;
         return Ok(());
     }
     let job_path = Path::new(args.first().ok_or("missing job.json")?);
     let out = Path::new(args.get(1).ok_or("missing output directory")?);
     let mut plan_path = None;
     let mut render = false;
+    let mut resume_path = None;
     let mut opts = args.iter().skip(2);
     while let Some(opt) = opts.next() {
         match opt.as_str() {
             "--render" => render = true,
+            "--resume" => resume_path = Some(opts.next().ok_or("--resume requires a previous output directory")?),
             "--plan" => plan_path = Some(opts.next().ok_or("--plan requires a JSON file")?),
             _ => return Err(format!("unknown option: {opt}")),
         }
@@ -38,7 +40,15 @@ fn run() -> Result<(), String> {
     // Preserve diagnostics / imported project on later model or render failures.
     let base = job_path.parent().unwrap_or(Path::new("."));
     stage("analysis");
-    let mut prepared = prepare(&job, base)?;
+    let mut prepared = if let Some(cache) = resume_path {
+        let p = filmcraft_shorts::resume::restore(&job, job_path, Path::new(cache))?;
+        writeln!(std::io::stderr(), "[shorts-planner] 저장된 동기화·대본 분석을 재사용합니다.").map_err(|e| e.to_string())?;
+        p
+    } else {
+        prepare(&job, base)?
+    };
+    std::fs::write(out.join("input-job.json"), serde_json::to_vec(&read_json::<serde_json::Value>(job_path)?).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
     execute(&mut prepared.session, "file.saveAs", json!({"path":out.join("sources.fcproj")}))?;
     std::fs::write(out.join("analysis.json"), serde_json::to_vec_pretty(&prepared.analysis).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     stage("planning");

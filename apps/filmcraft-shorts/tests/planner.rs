@@ -53,3 +53,23 @@ fn remote_and_disguised_remote_endpoints_are_refused() {
         assert!(request_plan(&planner, &json!({})).is_err());
     }
 }
+
+#[test]
+fn http_errors_are_actionable_without_leaking_server_bodies() {
+    for code in [400, 401, 503] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut b = [0; 8192];
+            let _ = stream.read(&mut b);
+            let body = "PRIVATE_BODY_MUST_NOT_LEAK";
+            write!(stream, "HTTP/1.1 {code} Error\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        });
+        let planner = Planner { url: format!("http://{addr}/v1/chat/completions"), model: "test".into() };
+        let error = request_plan(&planner, &json!({"groups":[]})).unwrap_err();
+        assert!(!error.contains("PRIVATE_BODY"));
+        assert!(error.contains(if code == 401 { "접근" } else { "HTTP" }), "{error}");
+        server.join().unwrap();
+    }
+}
