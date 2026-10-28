@@ -3,6 +3,7 @@
 
 pub mod active_fonts;
 mod dialogue;
+mod planner_batches;
 mod planner_input;
 pub mod psd_style;
 pub mod resume;
@@ -301,13 +302,17 @@ fn planner_error(error: &ureq::Error, seconds: u64) -> String {
 
 pub fn request_plan(planner: &Planner, analysis: &Value) -> Result<Plan> {
     validate_planner(planner)?;
+    planner_batches::plan(analysis, |input, instruction| request_part(planner, input, instruction))
+}
+
+fn request_part(planner: &Planner, input: &Value, instruction: &str) -> Result<Plan> {
     let url = &planner.url;
-    let content = serde_json::to_string(&planner_input::compact(analysis)?).map_err(|e| e.to_string())?;
-    if content.len() > LIMIT {
-        return Err("analysis exceeds 16 MiB; split the interview job".into());
+    let content = serde_json::to_string(input).map_err(|e| e.to_string())?;
+    if content.len() > planner_batches::INPUT_BYTES {
+        return Err("AI 입력 분할 한도를 초과했습니다. 주제 설명이나 촬영 그룹을 줄여 주세요.".into());
     }
     let timeout = planner_timeout(std::env::var("FILMCRAFT_PLANNER_TIMEOUT_SECONDS").ok().as_deref())?;
-    {
+    if instruction.is_empty() {
         use std::io::Write;
         let _ = writeln!(
             std::io::stderr(),
@@ -334,7 +339,8 @@ pub fn request_plan(planner: &Planner, analysis: &Value) -> Result<Plan> {
         request = request.header("Authorization", format!("Bearer {key}"));
     }
     // Do not expose HTTP bodies / headers in errors (they may contain credentials).
-    let mut response = request.send_json(json!({"model":planner.model,"temperature":0.2,"max_tokens":2048,"chat_template_kwargs":{"enable_thinking":false},"response_format":{"type":"json_object"},"messages":[{"role":"system","content":SYSTEM},{"role":"user","content":content}]})).map_err(|e| planner_error(&e,timeout))?;
+    let system = format!("{SYSTEM}\n{instruction}");
+    let mut response = request.send_json(json!({"model":planner.model,"temperature":0.2,"max_tokens":2048,"chat_template_kwargs":{"enable_thinking":false},"response_format":{"type":"json_object"},"messages":[{"role":"system","content":system},{"role":"user","content":content}]})).map_err(|e| planner_error(&e,timeout))?;
     let result: Value = response.body_mut().with_config().limit(LIMIT as u64).read_json().map_err(|e| planner_error(&e, timeout))?;
     if result["choices"][0]["finish_reason"] == "length" {
         return Err("AI의 편집 계획이 출력 길이 한도에서 잘렸습니다. 더 짧은 쇼츠나 적은 촬영 그룹으로 다시 시도하세요.".into());
