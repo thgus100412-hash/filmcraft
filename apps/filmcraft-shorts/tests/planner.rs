@@ -30,6 +30,11 @@ fn serve(content: &str) -> (Planner, std::thread::JoinHandle<()>) {
             assert!(request.len() < 1024 * 1024);
         }
         assert!(String::from_utf8_lossy(&request).contains("POST /v1/chat/completions"));
+        let end = request.windows(4).position(|s| s == b"\r\n\r\n").unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&request[end + 4..]).unwrap();
+        assert_eq!(payload["response_format"]["type"], "json_object");
+        assert_eq!(payload["response_format"]["schema"]["properties"]["segments"]["maxItems"], 0);
+        assert_eq!(payload["response_format"]["schema"]["additionalProperties"], false);
         write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
         stream.write_all(&body).unwrap();
     });
@@ -37,10 +42,7 @@ fn serve(content: &str) -> (Planner, std::thread::JoinHandle<()>) {
 }
 #[test]
 fn compatible_chat_completion_returns_structured_plan_and_rejects_invalid_json() {
-    for (response, valid) in [
-        (r#"{"title":"다시 시작","segments":[{"group":0,"audio":2,"camera":0,"first_word":0,"last_word":1,"reason":"주제에 맞는 원문"}]}"#, true),
-        ("not JSON", false),
-    ] {
+    for (response, valid) in [(r#"{"title":"다시 시작","segments":[]}"#, true), ("not JSON", false)] {
         let (planner, handle) = serve(response);
         assert_eq!(request_plan(&planner, &json!({"brief":"다시 시작","groups":[]})).is_ok(), valid);
         handle.join().unwrap();
